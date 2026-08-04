@@ -1,0 +1,26 @@
+# 构建上下文忽略：只发送构建所需文件，避免 node_modules / dist 干扰镜像
+**/node_modules
+**/dist
+**/.turbo
+
+# 本地数据 / 上传
+.uploads
+*.log
+
+# 环境与密钥（绝不进镜像）
+.env
+.env.*
+!.env.example
+
+# 设计稿 / 文档（无需进镜像）
+opencode-platform-design
+docs
+references
+*.md
+
+# 杂项
+.git
+.gitignore
+.DS_Store
+.vscode
+.idea

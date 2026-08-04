@@ -1,0 +1,53 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 公司生产环境（等公司集群信息确定后细化）
+# 镜像从阿里云 ACR 同步到公司 registry，tag 用具体版本号而非 latest
+
+namespace: opencode-platform-prod
+
+resources:
+  - ../../base
+
+images:
+  - name: opencode-server
+    newName: <公司-registry>/opencode-server
+    newTag: "1.0.0"  # 生产用具体版本号
+  - name: opencode-web
+    newName: <公司-registry>/opencode-web
+    newTag: "1.0.0"
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: opencode-server-config
+    patch: |-
+      - op: replace
+        path: /data/INSTANCE_NAMESPACE
+        value: opencode-instances-prod
+      - op: replace
+        path: /data/CORS_ORIGIN
+        value: https://opencode.company.com
+      - op: replace
+        path: /data/IMAGE_REGISTRY
+        value: <公司-registry>
+      - op: replace
+        path: /data/SIDECAR_IMAGE
+        value: <公司-registry>/opencode-sidecar:1.0.0
+      - op: replace
+        path: /data/STORAGE_CLASS_NAME
+        value: <公司-storage-class>
+  - target:
+      kind: Ingress
+      name: opencode-web
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: opencode.company.com
+
+# 生产环境多副本（高可用）
+replicas:
+  - name: opencode-server
+    count: 2
+  - name: opencode-web
+    count: 2

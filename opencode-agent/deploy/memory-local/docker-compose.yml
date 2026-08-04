@@ -1,0 +1,81 @@
+# 本地验证用：Mem0 OSS（REST API）+ Postgres/pgvector
+# 配套文档：docs/architecture/memory-store.md
+#
+# 用途：跑通「记忆写入 + 按 user_id/agent_id 检索」的最小闭环。
+# 不含 memory-gateway（gateway 是 Node 服务，本地用 pnpm dev 跑，调本 compose 起的 Mem0）。
+# 不含 Neo4j（P1/P2 用不上图谱，Phase 3 按需追加）。
+
+name: mem0-local
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # Postgres + pgvector（记忆向量存储）
+  # ─────────────────────────────────────────────────────────────
+  postgres:
+    image: niddmerfwaxuyqg5mh.xuanyuan.run/pgvector/pgvector:pg16
+    container_name: mem0-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    ports:
+      - "8432:5432"   # 避开本机可能的 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─────────────────────────────────────────────────────────────
+  # Mem0 REST API server（自构建，从 GitHub 源码 + patch 配置）
+  # 官方 mem0/mem0-api-server 镜像已停更(2025-09)且仅 arm64，必须源码构建。
+  # Dockerfile 里 patch 了 DEFAULT_CONFIG，注入 DeepSeek（LLM）+ 通义（embedder）。
+  # ─────────────────────────────────────────────────────────────
+  mem0:
+    build:
+      context: ./mem0-server
+      dockerfile: Dockerfile
+    container_name: mem0-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # —— Mem0 app 自身（FastAPI / uvicorn）——
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      AUTH_DISABLED: ${AUTH_DISABLED:-true}        # 本地验证关鉴权，gateway 层做鉴权
+      APP_DB_NAME: mem0_app
+      MEM0_TELEMETRY: "false"                       # 关闭遥测
+
+      # —— 向量库连接（mem0 server 读 POSTGRES_* 环境变量）——
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: mem0                             # 向量数据库名（init-db.sh 创建）
+      POSTGRES_COLLECTION_NAME: memories
+
+      # —— LLM（事实抽取）—— DeepSeek，OpenAI 兼容（patch 后的 main.py 读这些）
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com/v1
+
+      # —— Embedder（向量化）—— 通义 text-embedding-v3，OpenAI 兼容
+      TONGYI_API_KEY: ${TONGYI_API_KEY}
+      TONGYI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+    ports:
+      - "8888:8000"   # 宿主 8888 → 容器 8000
+    healthcheck:
+      # mem0 server 没有 /health 端点，用 /docs（FastAPI 自带）探活
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/docs').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s   # alembic migration + uvicorn 启动需要时间
+
+volumes:
+  postgres_data:

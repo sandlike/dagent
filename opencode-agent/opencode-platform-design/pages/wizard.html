@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新建实例 - OpenCode</title>
+    <style id="theme-vars">
+/* Source: structured-spec */
+:root {
+  /* Source: structured-spec | Core surface tokens */
+  --background: #ffffff;
+  --foreground: #0e1115;
+  --card: #ffffff;
+  --card-foreground: #0e1115;
+  --popover: #f9f9fa;
+  --popover-foreground: #0e1115;
+
+  /* Source: structured-spec | Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #eff1f4;
+  --secondary-foreground: #333942;
+  --muted: #eff1f4;
+  --muted-foreground: #7f8d9f;
+  --accent: #e5e9ff;
+  --accent-foreground: #00266b;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e7eaef;
+  --input: #e7eaef;
+  --ring: #557fff;
+
+  /* Source: structured-spec | Data visualization and sidebar tokens */
+  --chart-1: #557fff;
+  --chart-2: #0065fd;
+  --chart-3: #0057da;
+  --chart-4: #0043ad;
+  --chart-5: #002e7d;
+  --sidebar: #eff1f4;
+  --sidebar-foreground: #0e1115;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #d4daff;
+  --sidebar-accent-foreground: #00266b;
+  --sidebar-border: #e7eaef;
+  --sidebar-ring: #0065fd;
+
+  /* Source: structured-spec | Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Source: structured-spec | Radius token */
+  --radius: 1.2rem;
+
+  /* Source: structured-spec | Shadow construction tokens */
+  --shadow-x: 0;
+  --shadow-y: 1px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0;
+  --shadow-color: #0e1115;
+  --shadow-2xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(14 17 21 / 0), 0 2px 4px -1px rgb(14 17 21 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(14 17 21 / 0), 0 4px 6px -1px rgb(14 17 21 / 0);
+  --shadow-xl: 0 1px 0px 0px rgb(14 17 21 / 0), 0 8px 10px -1px rgb(14 17 21 / 0);
+  --shadow-2xl: 0 1px 0px 0px rgb(14 17 21 / 0);
+
+  /* Source: structured-spec | Rhythm tokens */
+  --tracking-normal: 0em;
+  --spacing: 0.24rem;
+
+  /* Code syntax color */
+  --code-string: #4ade80;
+}
+
+/* Source: structured-spec */
+.dark {
+  /* Source: structured-spec | Core surface tokens */
+  --background: #0e1115;
+  --foreground: #eff1f4;
+  --card: #0e1115;
+  --card-foreground: #eff1f4;
+  --popover: #22252a;
+  --popover-foreground: #e5e5e5;
+
+  /* Source: structured-spec | Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #22252a;
+  --secondary-foreground: #e5e5e5;
+  --muted: #161a20;
+  --muted-foreground: #afbbcb;
+  --accent: #00266b;
+  --accent-foreground: #bfdbfe;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #333942;
+  --input: #333942;
+  --ring: #00266b;
+
+  /* Source: structured-spec | Data visualization and sidebar tokens */
+  --chart-1: #60a5fa;
+  --chart-2: #3b82f6;
+  --chart-3: #2563eb;
+  --chart-4: #1d4ed8;
+  --chart-5: #1e40af;
+  --sidebar: #171717;
+  --sidebar-foreground: #e5e5e5;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #00266b;
+  --sidebar-accent-foreground: #bfdbfe;
+  --sidebar-border: #404040;
+  --sidebar-ring: #00266b;
+
+  /* Source: structured-spec | Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Source: structured-spec | Radius token */
+  --radius: 1.2rem;
+
+  /* Source: structured-spec | Shadow construction tokens */
+  --shadow-x: 0;
+  --shadow-y: 1px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0;
+  --shadow-color: #000000;
+  --shadow-2xs: 0 1px 0px 0px rgb(0 0 0 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(0 0 0 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(0 0 0 / 0), 0 1px 2px -1px rgb(0 0 0 / 0);
+  --shadow: 0 1px 0px 0px rgb(0 0 0 / 0), 0 1px 2px -1px rgb(0 0 0 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(0 0 0 / 0), 0 2px 4px -1px rgb(0 0 0 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(0 0 0 / 0), 0 4px 6px -1px rgb(0 0 0 / 0);
+  --shadow-xl: 0 1px 0px 0px rgb(0 0 0 / 0), 0 8px 10px -1px rgb(0 0 0 / 0);
+  --shadow-2xl: 0 1px 0px 0px rgb(0 0 0 / 0);
+
+  /* Code syntax color */
+  --code-string: #4ade80;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-foreground: var(--card-foreground);
+  }
+  @layer base {
+    body { background: var(--card-background); color: var(--card-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="flex flex-col h-screen overflow-hidden">
+
+      <!-- Top Bar -->
+      <header class="flex items-center justify-between h-14 px-6 border-b shrink-0" style="border-color: var(--border); background: var(--background);">
+        <a href="#" data-dom-id="wizard-back" class="inline-flex items-center gap-2 text-sm whitespace-nowrap hover:underline" style="color: var(--muted-foreground);">
+          <span data-icon="arrow-left" class="w-4 h-4" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/arrow-left.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/arrow-left.svg');"></span>
+          返回实例列表
+        </a>
+        <h1 class="text-base font-semibold truncate" style="color: var(--foreground);">新建实例</h1>
+        <div></div>
+      </header>
+
+      <!-- Body: Split Layout -->
+      <div class="flex flex-1 overflow-hidden">
+
+        <!-- Left Panel (55%) — Step Content -->
+        <div class="flex flex-col overflow-y-auto" style="width: 55%; min-width: 0; background: var(--background);">
+
+          <!-- Step Navigation -->
+          <div class="flex items-center gap-1 px-8 pt-6 pb-4 shrink-0">
+            <!-- Step 1 — current -->
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold" style="background: var(--primary); color: var(--primary-foreground);">1</span>
+              <span class="text-sm font-semibold" style="color: var(--foreground);">基本信息</span>
+            </div>
+            <span class="mx-2 text-xs" style="color: var(--border);">--</span>
+            <!-- Step 2 — upcoming -->
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold" style="background: var(--muted); color: var(--muted-foreground);">2</span>
+              <span class="text-sm" style="color: var(--muted-foreground);">模型与 Provider</span>
+            </div>
+            <span class="mx-2 text-xs" style="color: var(--border);">--</span>
+            <!-- Step 3 — upcoming -->
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold" style="background: var(--muted); color: var(--muted-foreground);">3</span>
+              <span class="text-sm" style="color: var(--muted-foreground);">权限策略</span>
+            </div>
+            <span class="mx-2 text-xs" style="color: var(--border);">--</span>
+            <!-- Step 4 — upcoming -->
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold" style="background: var(--muted); color: var(--muted-foreground);">4</span>
+              <span class="text-sm" style="color: var(--muted-foreground);">MCP + Skills</span>
+            </div>
+          </div>
+
+          <!-- Step 1 Content -->
+          <div class="px-8 pb-8 flex flex-col gap-6">
+
+            <!-- 实例名称 -->
+            <div class="flex flex-col gap-1.5">
+              <label class="text-sm font-medium" style="color: var(--foreground);">
+                实例名称 <span style="color: var(--destructive);">*</span>
+              </label>
+              <input type="text" placeholder="例如：my-coder" class="h-9 px-3 rounded-lg text-sm border outline-none" style="background: var(--card); border-color: var(--input); color: var(--foreground); font-family: var(--font-sans);" />
+            </div>
+
+            <!-- 显示描述 -->
+            <div class="flex flex-col gap-1.5">
+              <label class="text-sm font-medium" style="color: var(--foreground);">显示描述</label>
+              <span class="text-xs font-medium" style="color: var(--muted-foreground);">选填，用于在列表中展示</span>
+              <input type="text" placeholder="例如：日常编码助手" class="h-9 px-3 rounded-lg text-sm border outline-none" style="background: var(--card); border-color: var(--input); color: var(--foreground); font-family: var(--font-sans);" />
+            </div>
+
+            <!-- Agent 类型 -->
+            <div class="flex flex-col gap-2">
+              <label class="text-sm font-medium" style="color: var(--foreground);">Agent 类型</label>
+              <div class="grid grid-cols-3 gap-3">
+                <!-- OpenCode (selected) -->
+                <div class="flex flex-col gap-1.5 rounded-xl p-4 cursor-pointer" style="background: color-mix(in srgb, var(--primary) 8%, var(--card)); border: 2px solid var(--primary);">
+                  <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center justify-center w-4 h-4 rounded-full" style="background: var(--primary); color: var(--primary-foreground);">
+                      <span data-icon="check" class="w-2.5 h-2.5" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/check.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/check.svg');"></span>
+                    </span>
+                    <span class="text-sm font-semibold" style="color: var(--primary);">OpenCode</span>
+                  </div>
+                  <span class="text-xs" style="color: var(--muted-foreground);">开源 AI 编码助手</span>
+                </div>
+                <!-- Claude Code -->
+                <div class="flex flex-col gap-1.5 rounded-xl p-4 cursor-pointer" style="background: var(--card); border: 1px solid var(--border);">
+                  <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center justify-center w-4 h-4 rounded-full" style="background: var(--muted); color: var(--muted-foreground);"></span>
+                    <span class="text-sm font-medium" style="color: var(--foreground);">Claude Code</span>
+                  </div>
+                  <span class="text-xs" style="color: var(--muted-foreground);">Anthropic Claude 编码助手</span>
+                </div>
+                <!-- Codex -->
+                <div class="flex flex-col gap-1.5 rounded-xl p-4 cursor-pointer" style="background: var(--card); border: 1px solid var(--border);">
+                  <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center justify-center w-4 h-4 rounded-full" style="background: var(--muted); color: var(--muted-foreground);"></span>
+                    <span class="text-sm font-medium" style="color: var(--foreground);">Codex</span>
+                  </div>
+                  <span class="text-xs" style="color: var(--muted-foreground);">OpenAI Codex 编码助手</span>
+                </div>
+              </div>
+              <span class="text-xs" style="color: var(--muted-foreground);">后续将支持更多 Agent 类型</span>
+            </div>
+
+            <!-- K8s Namespace -->
+            <div class="flex flex-col gap-1.5">
+              <label class="text-sm font-medium" style="color: var(--foreground);">K8s Namespace</label>
+              <div class="flex items-center gap-2 h-9 px-3 rounded-lg text-sm border" style="background: var(--muted); border-color: var(--border); color: var(--muted-foreground);">
+                <span style="font-family: var(--font-mono); font-size: 13px;">opencode-users</span>
+                <span class="text-xs whitespace-nowrap">（系统默认）</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Right Panel (45%) — JSON Preview -->
+        <div class="flex flex-col overflow-hidden" style="width: 45%; min-width: 0; background: var(--muted);">
+
+          <!-- Title Bar -->
+          <div class="flex items-center justify-between h-11 px-4 border-b shrink-0" style="border-color: var(--border); background: var(--muted);">
+            <div class="flex items-center gap-2">
+              <span data-icon="file" class="w-4 h-4" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/file.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/file.svg'); color: var(--muted-foreground);"></span>
+              <span class="text-sm font-semibold" style="color: var(--foreground); font-family: var(--font-mono);">opencode.json</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button class="inline-flex items-center justify-center h-7 px-2.5 rounded-lg text-xs whitespace-nowrap border" style="background: var(--background); border-color: var(--border); color: var(--muted-foreground);">切换原始编辑</button>
+              <button class="inline-flex items-center justify-center h-7 px-2.5 rounded-lg text-xs whitespace-nowrap border" style="background: var(--background); border-color: var(--border); color: var(--muted-foreground);">导入JSON</button>
+            </div>
+          </div>
+
+          <!-- JSON Content -->
+          <div class="flex-1 overflow-y-auto p-4">
+            <pre class="text-sm leading-6" style="font-family: var(--font-mono); font-size: 13px;"><span style="color: var(--muted-foreground);">{</span>
+  <span style="color: var(--primary);">"name"</span><span style="color: var(--muted-foreground);">:</span> <span style="color: var(--code-string);">"my-coder"</span><span style="color: var(--muted-foreground);">,</span>
+  <span style="color: var(--primary);">"description"</span><span style="color: var(--muted-foreground);">:</span> <span style="color: var(--code-string);">"一个用于日常编码的助手"</span><span style="color: var(--muted-foreground);">,</span>
+  <span style="color: var(--primary);">"agent"</span><span style="color: var(--muted-foreground);">:</span> <span style="color: var(--code-string);">"opencode"</span><span style="color: var(--muted-foreground);">,</span>
+  <span style="color: var(--primary);">"namespace"</span><span style="color: var(--muted-foreground);">:</span> <span style="color: var(--code-string);">"opencode-users"</span>
+<span style="color: var(--muted-foreground);">}</span></pre>
+          </div>
+
+          <!-- Deploy Checklist -->
+          <div class="flex items-center gap-3 px-4 py-3 border-t shrink-0" style="border-color: var(--border); background: var(--muted);">
+            <span class="inline-flex items-center justify-center w-6 h-6 rounded-md text-xs" style="background: color-mix(in srgb, var(--chart-2) 15%, transparent); color: var(--chart-2);">
+              <span data-icon="check" class="w-3.5 h-3.5" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/check.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/check.svg');"></span>
+            </span>
+            <span class="text-xs" style="color: var(--chart-2);">ConfigMap</span>
+
+            <span class="inline-flex items-center justify-center w-6 h-6 rounded-md text-xs" style="background: color-mix(in srgb, var(--chart-2) 15%, transparent); color: var(--chart-2);">
+              <span data-icon="check" class="w-3.5 h-3.5" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/check.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/check.svg');"></span>
+            </span>
+            <span class="text-xs" style="color: var(--chart-2);">Secret</span>
+
+            <span class="inline-flex items-center justify-center w-6 h-6 rounded-md text-xs" style="background: color-mix(in srgb, var(--chart-2) 15%, transparent); color: var(--chart-2);">
+              <span data-icon="check" class="w-3.5 h-3.5" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/check.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/check.svg');"></span>
+            </span>
+            <span class="text-xs" style="color: var(--chart-2);">Deployment</span>
+
+            <span class="inline-flex items-center justify-center w-6 h-6 rounded-md text-xs" style="background: color-mix(in srgb, var(--chart-2) 15%, transparent); color: var(--chart-2);">
+              <span data-icon="check" class="w-3.5 h-3.5" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/check.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/check.svg');"></span>
+            </span>
+            <span class="text-xs" style="color: var(--chart-2);">PVC</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Bar -->
+      <footer class="flex items-center justify-between h-14 px-6 border-t shrink-0" style="border-color: var(--border); background: var(--background);">
+        <div class="flex items-center gap-3">
+          <button data-dom-id="wizard-prev" class="inline-flex items-center justify-center h-9 px-4 rounded-full text-sm font-medium whitespace-nowrap border cursor-pointer" style="background: var(--muted); border-color: transparent; color: var(--foreground);">
+            <span data-icon="chevron-left" class="w-4 h-4 mr-1" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/chevron-left.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/chevron-left.svg');"></span>
+            上一步
+          </button>
+        </div>
+        <div class="flex items-center gap-3">
+          <button data-dom-id="deploy-submit" class="inline-flex items-center justify-center h-9 px-4 rounded-full text-sm font-medium whitespace-nowrap border cursor-pointer" style="background: var(--muted); border-color: transparent; color: var(--muted-foreground);" disabled>
+            一键部署
+          </button>
+          <button data-dom-id="wizard-next" class="inline-flex items-center justify-center h-9 px-5 rounded-full text-sm font-semibold whitespace-nowrap cursor-pointer" style="background: var(--primary); color: var(--primary-foreground);">
+            下一步
+            <span data-icon="chevron-right" class="w-4 h-4 ml-1" style="-webkit-mask-image: url('../assets/icons/dl_builtin_doubao/chevron-right.svg'); mask-image: url('../assets/icons/dl_builtin_doubao/chevron-right.svg');"></span>
+          </button>
+        </div>
+      </footer>
+
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

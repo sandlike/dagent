@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Untitled</title>
+    <style id="theme-vars">
+/* Source: structured-spec */
+:root {
+  /* Source: structured-spec | Core surface tokens */
+  --background: #ffffff;
+  --foreground: #0e1115;
+  --card: #ffffff;
+  --card-foreground: #0e1115;
+  --popover: #f9f9fa;
+  --popover-foreground: #0e1115;
+
+  /* Source: structured-spec | Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #eff1f4;
+  --secondary-foreground: #333942;
+  --muted: #eff1f4;
+  --muted-foreground: #7f8d9f;
+  --accent: #e5e9ff;
+  --accent-foreground: #00266b;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e7eaef;
+  --input: #e7eaef;
+  --ring: #557fff;
+
+  /* Source: structured-spec | Data visualization and sidebar tokens */
+  --chart-1: #557fff;
+  --chart-2: #0065fd;
+  --chart-3: #0057da;
+  --chart-4: #0043ad;
+  --chart-5: #002e7d;
+  --sidebar: #eff1f4;
+  --sidebar-foreground: #0e1115;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #d4daff;
+  --sidebar-accent-foreground: #00266b;
+  --sidebar-border: #e7eaef;
+  --sidebar-ring: #0065fd;
+
+  /* Source: structured-spec | Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Source: structured-spec | Radius token */
+  --radius: 1.2rem;
+
+  /* Source: structured-spec | Shadow construction tokens */
+  --shadow-x: 0;
+  --shadow-y: 1px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0;
+  --shadow-color: #0e1115;
+  --shadow-2xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(14 17 21 / 0), 0 2px 4px -1px rgb(14 17 21 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(14 17 21 / 0), 0 4px 6px -1px rgb(14 17 21 / 0);
+  --shadow-xl: 0 1px 0px 0px rgb(14 17 21 / 0), 0 8px 10px -1px rgb(14 17 21 / 0);
+  --shadow-2xl: 0 1px 0px 0px rgb(14 17 21 / 0);
+
+  /* Source: structured-spec | Rhythm tokens */
+  --tracking-normal: 0em;
+  --spacing: 0.24rem;
+}
+
+/* Source: structured-spec */
+.dark {
+  /* Source: structured-spec | Core surface tokens */
+  --background: #0e1115;
+  --foreground: #eff1f4;
+  --card: #0e1115;
+  --card-foreground: #eff1f4;
+  --popover: #22252a;
+  --popover-foreground: #e5e5e5;
+
+  /* Source: structured-spec | Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #22252a;
+  --secondary-foreground: #e5e5e5;
+  --muted: #161a20;
+  --muted-foreground: #afbbcb;
+  --accent: #00266b;
+  --accent-foreground: #bfdbfe;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #333942;
+  --input: #333942;
+  --ring: #00266b;
+
+  /* Source: structured-spec | Data visualization and sidebar tokens */
+  --chart-1: #60a5fa;
+  --chart-2: #3b82f6;
+  --chart-3: #2563eb;
+  --chart-4: #1d4ed8;
+  --chart-5: #1e40af;
+  --sidebar: #171717;
+  --sidebar-foreground: #e5e5e5;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #00266b;
+  --sidebar-accent-foreground: #bfdbfe;
+  --sidebar-border: #404040;
+  --sidebar-ring: #00266b;
+
+  /* Source: structured-spec | Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Source: structured-spec | Radius token */
+  --radius: 1.2rem;
+
+  /* Source: structured-spec | Shadow construction tokens */
+  --shadow-x: 0;
+  --shadow-y: 1px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0;
+  --shadow-color: #000000;
+  --shadow-2xs: 0 1px 0px 0px rgb(0 0 0 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(0 0 0 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(0 0 0 / 0), 0 1px 2px -1px rgb(0 0 0 / 0);
+  --shadow: 0 1px 0px 0px rgb(0 0 0 / 0), 0 1px 2px -1px rgb(0 0 0 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(0 0 0 / 0), 0 2px 4px -1px rgb(0 0 0 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(0 0 0 / 0), 0 4px 6px -1px rgb(0 0 0 / 0);
+  --shadow-xl: 0 1px 0px 0px rgb(0 0 0 / 0), 0 8px 10px -1px rgb(0 0 0 / 0);
+  --shadow-2xl: 0 1px 0px 0px rgb(0 0 0 / 0);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-foreground: var(--card-foreground);
+  }
+  @layer base {
+    body { background: var(--card-background); color: var(--card-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased" style="margin:0;padding:0;overflow:hidden;">
+
+<!-- App Shell -->
+<div class="app-shell" style="display:grid;grid-template-columns:200px minmax(0,1fr);height:100vh;background:var(--background);overflow:hidden;">
+
+  <!-- ===== Sidebar (200px) ===== -->
+  <aside style="display:flex;flex-direction:column;background:var(--sidebar);border-right:1px solid var(--sidebar-border);min-height:0;">
+
+    <!-- Sidebar nav items -->
+    <nav style="flex:1;min-height:0;overflow-y:auto;padding:8px 8px 12px;display:flex;flex-direction:column;gap:2px;">
+
+      <button data-nav-key="chat" data-active="false" class="shell-nav-item" style="width:100%;border:0;background:transparent;color:var(--sidebar-foreground);border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:11px;text-align:left;font-size:14px;font-family:var(--font-sans);line-height:1.2;cursor:pointer;transition:background 140ms ease, color 140ms ease;">
+        <span data-icon="message-circle-more" style="width:18px;height:18px;mask-image:url('../assets/icons/dl_builtin_doubao/message-circle-more.svg');"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">对话</span>
+      </button>
+
+      <button data-nav-key="skills" data-active="false" class="shell-nav-item" style="width:100%;border:0;background:transparent;color:var(--sidebar-foreground);border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:11px;text-align:left;font-size:14px;font-family:var(--font-sans);line-height:1.2;cursor:pointer;transition:background 140ms ease, color 140ms ease;">
+        <span data-icon="folder" style="width:18px;height:18px;mask-image:url('../assets/icons/dl_builtin_doubao/folder.svg');"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Skills</span>
+      </button>
+
+      <button data-nav-key="monitor" data-active="false" class="shell-nav-item" style="width:100%;border:0;background:transparent;color:var(--sidebar-foreground);border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:11px;text-align:left;font-size:14px;font-family:var(--font-sans);line-height:1.2;cursor:pointer;transition:background 140ms ease, color 140ms ease;">
+        <span data-icon="circle-check" style="width:18px;height:18px;mask-image:url('../assets/icons/dl_builtin_doubao/circle-check.svg');"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">监控</span>
+      </button>
+
+      <button data-nav-key="settings" data-active="false" class="shell-nav-item" style="width:100%;border:0;background:transparent;color:var(--sidebar-foreground);border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:11px;text-align:left;font-size:14px;font-family:var(--font-sans);line-height:1.2;cursor:pointer;transition:background 140ms ease, color 140ms ease;">
+        <span data-icon="pen-line" style="width:18px;height:18px;mask-image:url('../assets/icons/dl_builtin_doubao/pen-line.svg');"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">设置</span>
+      </button>
+
+    </nav>
+  </aside>
+
+  <!-- ===== Main Column (topbar + content) ===== -->
+  <div style="min-width:0;display:flex;flex-direction:column;min-height:0;">
+
+    <!-- Topbar (56px) -->
+    <header style="height:56px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--border);background:var(--background);">
+
+      <!-- Logo (left) -->
+      <div style="display:flex;align-items:center;gap:8px;flex:none;">
+        <span data-icon="box" style="width:22px;height:22px;mask-image:url('../assets/icons/dl_builtin_doubao/box.svg');background-color:var(--primary);"></span>
+        <span style="font-size:15px;font-weight:600;color:var(--foreground);white-space:nowrap;">OpenCode</span>
+      </div>
+
+      <!-- Instance selector (center) -->
+      <div style="flex:1;display:flex;justify-content:center;min-width:0;">
+        <button data-nav-key="instance-selector" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--foreground);font-size:13px;font-family:var(--font-sans);cursor:pointer;transition:background 140ms ease, border-color 140ms ease;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">my-instance-01</span>
+          <span data-icon="chevron-down" style="width:14px;height:14px;mask-image:url('../assets/icons/dl_builtin_doubao/chevron-down.svg');color:var(--muted-foreground);"></span>
+        </button>
+      </div>
+
+      <!-- User avatar menu (right) -->
+      <div style="flex:none;display:flex;align-items:center;gap:8px;">
+        <div style="width:30px;height:30px;border-radius:999px;background:linear-gradient(135deg,var(--chart-1),var(--chart-4));display:grid;place-items:center;color:#fff;font-size:12px;font-weight:600;">U</div>
+        <span data-icon="chevron-down" style="width:14px;height:14px;mask-image:url('../assets/icons/dl_builtin_doubao/chevron-down.svg');color:var(--muted-foreground);"></span>
+      </div>
+
+    </header>
+
+    <!-- SLOT: main content -->
+    <div class="shell-main-content" style="flex:1;min-height:0;overflow-y:auto;"><!-- SLOT: main content --></div>
+
+  </div>
+
+</div>
+
+<!-- Active-state styling for nav items -->
+<style>
+.shell-nav-item:hover {
+  background: color-mix(in srgb, var(--background) 64%, var(--sidebar));
+}
+.shell-nav-item[data-active="true"] {
+  background: var(--background);
+  color: var(--foreground);
+  font-weight: 600;
+}
+.shell-nav-item[data-active="true"] [data-icon] {
+  color: var(--primary);
+}
+</style>
+
+<script>lucide.createIcons();</script>
+</body>
+</html>

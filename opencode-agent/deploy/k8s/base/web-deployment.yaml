@@ -1,0 +1,81 @@
+# 前端 Deployment + Service + Ingress
+# nginx 托管静态文件 + /api 代理到 opencode-server:3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode-web
+  labels:
+    app: opencode-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode-web
+  template:
+    metadata:
+      labels:
+        app: opencode-web
+    spec:
+      # initContainer 等待后端就绪，避免 nginx 启动时 proxy_pass 解析失败（emerg）
+      # 复用 web 镜像（nginx:alpine 自带 nslookup），避免额外拉 busybox
+      initContainers:
+        - name: wait-for-server
+          image: opencode-web:latest
+          command:
+            - sh
+            - -c
+            - "until nslookup opencode-server.opencode-platform-test.svc.cluster.local; do echo waiting for opencode-server; sleep 2; done"
+      containers:
+        - name: web
+          image: opencode-web:latest
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opencode-web
+spec:
+  selector:
+    app: opencode-web
+  ports:
+    - port: 80
+      targetPort: 80
+---
+# Ingress：域名由 overlay 注入（各环境不同域名）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: opencode-web
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # SSE 支持（对话流式响应）
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: opencode.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: opencode-web
+                port:
+                  number: 80

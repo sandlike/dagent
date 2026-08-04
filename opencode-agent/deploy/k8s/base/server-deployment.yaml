@@ -1,0 +1,71 @@
+# 管理后端 Deployment + Service + ConfigMap
+# 敏感值（DB密码/JWT密钥/镜像拉取密码）从 Secret 注入，Secret 由 overlay 或手动创建
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opencode-server-config
+data:
+  # 非敏感配置（各环境通过 overlay 覆盖）
+  NODE_ENV: "production"
+  PORT: "3000"
+  INSTANCE_NAMESPACE: "opencode-instances"
+  IMAGE_REGISTRY: "registry.cn-hangzhou.aliyuncs.com/citics_lwj"
+  SIDECAR_IMAGE: "registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-sidecar:latest"
+  PVC_SIZE: "20Gi"
+  STORAGE_CLASS_NAME: "alicloud-disk-essd"
+  IMAGE_PULL_REGISTRY: "registry.cn-hangzhou.aliyuncs.com"
+  IMAGE_PULL_USER: "lwjlwjlwj33712563"
+  # CORS 和 DB 库名由 overlay 注入（与环境相关）
+  CORS_ORIGIN: "http://localhost:5173"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode-server
+  labels:
+    app: opencode-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode-server
+  template:
+    metadata:
+      labels:
+        app: opencode-server
+    spec:
+      containers:
+        - name: server
+          image: opencode-server:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: opencode-server-config
+            - secretRef:
+                name: opencode-server-secret
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opencode-server
+spec:
+  selector:
+    app: opencode-server
+  ports:
+    - port: 3000
+      targetPort: 3000

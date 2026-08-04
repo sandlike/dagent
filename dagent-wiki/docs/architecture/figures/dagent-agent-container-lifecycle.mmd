@@ -1,0 +1,28 @@
+flowchart TD
+    deploy["部署 Dagent"] --> requirementService["dagent-requirement-agent 常驻服务"]
+    deploy --> developmentService["dagent-development-agent 常驻服务"]
+    pipelineStart["需求进入澄清阶段"] --> requirementSession["创建或复用 requirement_session"]
+    requirementService --> requirementSession
+    requirementSession --> requirementWork["需求描述与澄清"]
+    requirementWork --> specGate{"开发文档是否通过"}
+    specGate -->|"否"| requirementWork
+    specGate -->|"是"| developmentSession["创建或复用 development_session"]
+    developmentService --> developmentSession
+    developmentSession --> developmentWork["研发、最小检查、报告与修复"]
+    developmentWork --> humanWait{"等待人工确认"}
+    humanWait -->|"开发或验收回炉"| developmentSession
+    humanWait -->|"需重新澄清"| requirementSession
+    humanWait -->|"最终验收通过"| archive["归档需求产物、日志与 Session 映射"]
+    archive --> servicesRemain["两个 Agent 服务继续承接其他需求"]
+    servicesRemain --> systemStop{"整套 Dagent 是否终止"}
+    systemStop -->|"否"| servicesRemain
+    systemStop -->|"是"| destroyDeployments["销毁两个 Agent Deployment"]
+
+    classDef lifecycle fill:#E8F3FF,stroke:#2563EB,color:#172033,stroke-width:2px;
+    classDef work fill:#ECFDF3,stroke:#169B62,color:#172033,stroke-width:2px;
+    classDef gate fill:#FFF7E6,stroke:#D97706,color:#172033,stroke-width:2px;
+    classDef terminal fill:#F2F4F7,stroke:#475467,color:#172033,stroke-width:2px;
+    class deploy,pipelineStart,requirementService,developmentService,requirementSession,developmentSession,servicesRemain,destroyDeployments lifecycle;
+    class requirementWork,developmentWork work;
+    class specGate,humanWait,systemStop gate;
+    class archive terminal;

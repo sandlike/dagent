@@ -1,0 +1,103 @@
+{
+  "root": {
+    "nodeId": "gen-project-shell",
+    "kind": "project-shell",
+    "pageIds": [],
+    "output": "partials/project-shell.html",
+    "sharedRegions": ["topbar", "sidebar"],
+    "privateRegions": [],
+    "mutableSlots": ["activeNavItem", "instanceName"],
+    "status": "planned",
+    "children": [
+      {
+        "nodeId": "gen-page-login",
+        "kind": "page-leaf",
+        "pageIds": ["page-login"],
+        "output": "pages/login.html",
+        "sharedRegions": [],
+        "privateRegions": ["full page"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-instance-pages-common",
+        "kind": "shared-branch",
+        "pageIds": [],
+        "output": "partials/instance-pages-common.html",
+        "sharedRegions": ["topbar", "sidebar"],
+        "privateRegions": [],
+        "mutableSlots": ["activeSubNav"],
+        "status": "planned",
+        "children": [
+          {
+            "nodeId": "gen-page-instances",
+            "kind": "page-leaf",
+            "pageIds": ["page-instances"],
+            "output": "pages/instances.html",
+            "sharedRegions": [],
+            "privateRegions": ["main content"],
+            "mutableSlots": [],
+            "status": "planned",
+            "children": []
+          },
+          {
+            "nodeId": "gen-page-chat",
+            "kind": "page-leaf",
+            "pageIds": ["page-chat"],
+            "output": "pages/chat.html",
+            "sharedRegions": [],
+            "privateRegions": ["chat area"],
+            "mutableSlots": ["activeSubNav"],
+            "status": "planned",
+            "children": []
+          },
+          {
+            "nodeId": "gen-page-skills",
+            "kind": "page-leaf",
+            "pageIds": ["page-skills"],
+            "output": "pages/skills.html",
+            "sharedRegions": [],
+            "privateRegions": ["skills area"],
+            "mutableSlots": ["activeSubNav"],
+            "status": "planned",
+            "children": []
+          },
+          {
+            "nodeId": "gen-page-monitor",
+            "kind": "page-leaf",
+            "pageIds": ["page-monitor"],
+            "output": "pages/monitor.html",
+            "sharedRegions": [],
+            "privateRegions": ["monitor area"],
+            "mutableSlots": ["activeSubNav"],
+            "status": "planned",
+            "children": []
+          },
+          {
+            "nodeId": "gen-page-settings",
+            "kind": "page-leaf",
+            "pageIds": ["page-settings"],
+            "output": "pages/settings.html",
+            "sharedRegions": [],
+            "privateRegions": ["settings area"],
+            "mutableSlots": ["activeSubNav"],
+            "status": "planned",
+            "children": []
+          }
+        ]
+      },
+      {
+        "nodeId": "gen-page-wizard",
+        "kind": "page-leaf",
+        "pageIds": ["page-wizard"],
+        "output": "pages/wizard.html",
+        "sharedRegions": [],
+        "privateRegions": ["full wizard page"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      }
+    ]
+  }
+}

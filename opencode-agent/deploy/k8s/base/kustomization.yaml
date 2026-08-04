@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 基础资源：管理后端 + 前端 + 实例默认命名空间
+# 各环境 overlay 通过 namePrefix/namespace/images/patches 覆盖差异
+resources:
+  - namespace.yaml
+  - server-deployment.yaml
+  - web-deployment.yaml
+
+# 镜像 tag 由 overlay 覆盖；这里给默认值
+images:
+  - name: opencode-server
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-server
+    newTag: latest
+  - name: opencode-web
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-web
+    newTag: latest

@@ -1,0 +1,169 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dagent-backend
+  labels:
+    app.kubernetes.io/name: dagent-backend
+    app.kubernetes.io/part-of: dagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dagent-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dagent-backend
+        app.kubernetes.io/part-of: dagent
+    spec:
+      imagePullSecrets:
+        - name: opencode-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: cn-hangzhou.10.45.144.67
+      initContainers:
+        - name: install-app
+          image: dagent-backend:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              python -c "import shutil; shutil.unpack_archive('/bundle/dagent.tar.gz', '/app')"
+              && python -m pip install --no-cache-dir
+              --index-url https://mirrors.aliyun.com/pypi/simple/
+              --target /runtime /app
+              && chmod -R a+rX /app /runtime
+          volumeMounts:
+            - name: source-bundle
+              mountPath: /bundle
+              readOnly: true
+            - name: app-source
+              mountPath: /app
+            - name: python-runtime
+              mountPath: /runtime
+      containers:
+        - name: backend
+          image: dagent-backend:local
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command:
+            - sh
+            - -c
+            - >-
+              test -f /app/dagent/app.py
+              || { echo 'dagent source is missing from /app'; find /app -maxdepth 2 -type f; exit 1; };
+              exec python -m uvicorn dagent.app:create_app
+              --factory --host 0.0.0.0 --port 8000
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: dagent-config
+            - secretRef:
+                name: dagent-secrets
+          env:
+            - name: PYTHONPATH
+              value: /runtime:/app
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dagent-rds
+                  key: DATABASE_URL
+            - name: GLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dagent-glm
+                  key: GLM_API_KEY
+            - name: PERSONAL_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dagent-personal-openai
+                  key: OPENAI_API_KEY
+            - name: OPENCODE_SERVER_USERNAME
+              value: opencode
+            - name: OPENCODE_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dagent-development-agent-auth
+                  key: OPENCODE_SERVER_PASSWORD
+            - name: AGENT_CALLBACK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dagent-agent-callback
+                  key: AGENT_CALLBACK_TOKEN
+            - name: GIT_CREDENTIAL_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dagent-git-credential-key
+                  key: GIT_CREDENTIAL_ENCRYPTION_KEY
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: app-source
+              mountPath: /app
+              readOnly: true
+            - name: python-runtime
+              mountPath: /runtime
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: source-bundle
+          configMap:
+            name: dagent-source-bundle-v33
+        - name: app-source
+          emptyDir: {}
+        - name: python-runtime
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dagent-backend
+  labels:
+    app.kubernetes.io/name: dagent-backend
+    app.kubernetes.io/part-of: dagent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dagent-backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

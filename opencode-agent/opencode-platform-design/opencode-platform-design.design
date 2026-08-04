@@ -1,0 +1,245 @@
+{
+  "data": [
+    {
+      "id": "page-login",
+      "title": "登录/注册",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/login.html",
+        "interactions": [
+          {
+            "domId": "login-submit",
+            "targetPageId": "page-instances"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-instances",
+      "title": "实例列表",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 620,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/instances.html",
+        "interactions": [
+          {
+            "domId": "new-instance",
+            "targetPageId": "page-wizard"
+          },
+          {
+            "domId": "enter-instance",
+            "targetPageId": "page-chat"
+          },
+          {
+            "domId": "enter-instance-settings",
+            "targetPageId": "page-settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-wizard",
+      "title": "配置向导",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 620,
+        "y": 1885,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/wizard.html",
+        "interactions": [
+          {
+            "domId": "deploy-submit",
+            "targetPageId": "page-instances"
+          },
+          {
+            "domId": "wizard-back",
+            "targetPageId": "page-instances"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-wizard-step3",
+      "title": "配置向导 - 权限策略",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 0,
+        "y": 1885,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/wizard-step3.html",
+        "interactions": [
+          {
+            "domId": "deploy-submit",
+            "targetPageId": "page-instances"
+          },
+          {
+            "domId": "wizard-back",
+            "targetPageId": "page-instances"
+          },
+          {
+            "domId": "wizard-next",
+            "targetPageId": "page-wizard"
+          },
+          {
+            "domId": "wizard-prev",
+            "targetPageId": "page-wizard"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-chat",
+      "title": "内嵌对话",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 0,
+        "y": 377,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/chat.html",
+        "interactions": [
+          {
+            "domId": "nav-skills",
+            "targetPageId": "page-skills"
+          },
+          {
+            "domId": "nav-monitor",
+            "targetPageId": "page-monitor"
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-skills",
+      "title": "Skill 管理",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 0,
+        "y": 754,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/skills.html",
+        "interactions": [
+          {
+            "domId": "nav-chat",
+            "targetPageId": "page-chat"
+          },
+          {
+            "domId": "nav-monitor",
+            "targetPageId": "page-monitor"
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-monitor",
+      "title": "运行时监控",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 0,
+        "y": 1131,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/monitor.html",
+        "interactions": [
+          {
+            "domId": "nav-chat",
+            "targetPageId": "page-chat"
+          },
+          {
+            "domId": "nav-skills",
+            "targetPageId": "page-skills"
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-settings",
+      "title": "实例设置",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751107200000,
+      "canvasData": {
+        "x": 0,
+        "y": 1508,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/settings.html",
+        "interactions": [
+          {
+            "domId": "nav-chat",
+            "targetPageId": "page-chat"
+          },
+          {
+            "domId": "nav-skills",
+            "targetPageId": "page-skills"
+          },
+          {
+            "domId": "nav-monitor",
+            "targetPageId": "page-monitor"
+          }
+        ]
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "OpenCode 容器管理平台",
+    "designLibrary": {
+      "name": "豆包",
+      "id": "dl_builtin_doubao",
+      "version": null,
+      "scope": "built-in-global",
+      "path": "/Users/liangwenjie/.trae-cn/design_libraries/dl_builtin_doubao",
+      "versionSource": "metadata.json"
+    },
+    "windowSize": {
+      "width": 800,
+      "height": 600
+    }
+  }
+}

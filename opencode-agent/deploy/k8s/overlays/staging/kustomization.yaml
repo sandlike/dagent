@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 公司预发环境（等公司集群信息确定后细化）
+# 镜像从阿里云 ACR 同步到公司 registry
+
+namespace: opencode-platform-staging
+
+resources:
+  - ../../base
+
+images:
+  - name: opencode-server
+    newName: <公司-registry>/opencode-server
+    newTag: staging
+  - name: opencode-web
+    newName: <公司-registry>/opencode-web
+    newTag: staging
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: opencode-server-config
+    patch: |-
+      - op: replace
+        path: /data/INSTANCE_NAMESPACE
+        value: opencode-instances-staging
+      - op: replace
+        path: /data/CORS_ORIGIN
+        value: https://opencode-staging.company.com
+      - op: replace
+        path: /data/IMAGE_REGISTRY
+        value: <公司-registry>
+      - op: replace
+        path: /data/SIDECAR_IMAGE
+        value: <公司-registry>/opencode-sidecar:staging
+      - op: replace
+        path: /data/STORAGE_CLASS_NAME
+        value: <公司-storage-class>
+  - target:
+      kind: Ingress
+      name: opencode-web
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: opencode-staging.company.com
+
+replicas:
+  - name: opencode-server
+    count: 1
+  - name: opencode-web
+    count: 1

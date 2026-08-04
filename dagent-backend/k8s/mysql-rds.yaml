@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app.kubernetes.io/name: mysql-rds
+    app.kubernetes.io/part-of: dagent
+spec:
+  type: ExternalName
+  externalName: rm-bp1re3006402176y4.rwlb.rds.aliyuncs.com

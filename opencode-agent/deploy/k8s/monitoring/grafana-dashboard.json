@@ -1,0 +1,100 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "OMA 平台监控",
+    "tags": ["oma", "opencode"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "refresh": "15s",
+    "time": { "from": "now-1h", "to": "now" },
+    "panels": [
+      {
+        "title": "请求总数（按状态码）",
+        "type": "stat",
+        "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "sum(http_requests_total)",
+          "legendFormat": "Total"
+        }],
+        "fieldConfig": {
+          "defaults": { "unit": "req" }
+        }
+      },
+      {
+        "title": "请求 QPS",
+        "type": "graph",
+        "gridPos": { "h": 6, "w": 12, "x": 6, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "rate(http_requests_total[1m])",
+          "legendFormat": "{{method}} {{path}}"
+        }]
+      },
+      {
+        "title": "平均响应延迟（ms）",
+        "type": "graph",
+        "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "http_request_duration_ms_avg_ms",
+          "legendFormat": "{{path}}"
+        }],
+        "fieldConfig": {
+          "defaults": { "unit": "ms" }
+        }
+      },
+      {
+        "title": "Sidecar 请求量（按路径）",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "http_requests_total{job=\"oma-sidecar\"}",
+          "legendFormat": "{{path}} ({{status}})"
+        }]
+      },
+      {
+        "title": "Server 请求量（按路径）",
+        "type": "graph",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "http_requests_total{job=\"oma-server\"}",
+          "legendFormat": "{{path}} ({{status}})"
+        }]
+      },
+      {
+        "title": "健康检查次数",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 14 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "health_checks_total"
+        }]
+      },
+      {
+        "title": "错误请求（5xx）",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 14 },
+        "datasource": "Prometheus",
+        "targets": [{
+          "expr": "sum(http_requests_total{status=~\"5..\"})"
+        }],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "req",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "red", "value": 1 }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "overwrite": true
+}

@@ -1,0 +1,30 @@
+# Dagent 目标业务流程
+
+本图展示双 Agent 简化流程：开发 Agent 完成实现、最小检查和测试样例生成，正式功能验证由人工执行。
+
+```mermaid
+flowchart TD
+    requirementInput["需求描述"] --> requirementClarification["需求澄清"]
+    requirementClarification --> developmentSpec["生成开发文档"]
+    developmentSpec --> specReview{"人工确认开发文档"}
+    specReview -->|"驳回并填写意见"| requirementClarification
+    specReview -->|"通过"| implementation["研发实现"]
+    implementation --> minimumChecks["最小单元测试与冒烟检查"]
+    minimumChecks --> developmentReport["生成研发报告与人工测试用例"]
+    developmentReport --> reportReview{"人工确认研发报告"}
+    reportReview -->|"驳回"| implementation
+    reportReview -->|"通过"| manualTesting["QA 按测试用例人工验证"]
+    manualTesting --> finalAcceptance{"最终人工验收"}
+    finalAcceptance -->|"不通过并提出意见"| implementation
+    finalAcceptance -->|"明确确认"| completed["需求完成并归档"]
+
+    classDef userStage fill:#E8F3FF,stroke:#2563EB,color:#172033,stroke-width:2px;
+    classDef agentStage fill:#ECFDF3,stroke:#169B62,color:#172033,stroke-width:2px;
+    classDef gate fill:#FFF7E6,stroke:#D97706,color:#172033,stroke-width:2px;
+    classDef terminal fill:#F2F4F7,stroke:#475467,color:#172033,stroke-width:2px;
+    class requirementInput userStage;
+    class requirementClarification,developmentSpec,implementation,minimumChecks,developmentReport agentStage;
+    class manualTesting userStage;
+    class specReview,reportReview,finalAcceptance gate;
+    class completed terminal;
+```

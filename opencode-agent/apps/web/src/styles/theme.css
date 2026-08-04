@@ -1,0 +1,117 @@
+/* ===== 设计系统 token（淡蓝白主题）===== */
+:root {
+  /* Core surface tokens — 白底 + 淡蓝灰层次 */
+  --background: #f5f8fc;
+  --foreground: #1a2740;
+  --card: #ffffff;
+  --card-foreground: #1a2740;
+  --popover: #ffffff;
+  --popover-foreground: #1a2740;
+
+  /* Semantic brand tokens — 清爽蓝 */
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #e8f0fb;
+  --secondary-foreground: #3b5266;
+  --muted: #eef3f9;
+  --muted-foreground: #6b829e;
+  --accent: #dbeafe;
+  --accent-foreground: #1e40af;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #dce6f2;
+  --input: #dce6f2;
+  --ring: #60a5fa;
+
+  /* Data visualization and sidebar tokens — 淡蓝侧边栏 */
+  --chart-1: #60a5fa;
+  --chart-2: #3b82f6;
+  --chart-3: #2563eb;
+  --chart-4: #1d4ed8;
+  --chart-5: #1e40af;
+  --sidebar: #eef4fc;
+  --sidebar-foreground: #1a2740;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dbeafe;
+  --sidebar-accent-foreground: #1e40af;
+  --sidebar-border: #dce6f2;
+  --sidebar-ring: #2563eb;
+
+  /* Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Radius token */
+  --radius: 1.2rem;
+
+  /* Shadow tokens */
+  --shadow-2xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(14 17 21 / 0), 0 2px 4px -1px rgb(14 17 21 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(14 17 21 / 0), 0 4px 6px -1px rgb(14 17 21 / 0);
+
+  /* Rhythm tokens */
+  --tracking-normal: 0em;
+  --spacing: 0.24rem;
+
+  /* Status colors */
+  --status-running: #22c55e;
+  --status-deploying: #f59e0b;
+  --status-error: #ef4444;
+  --status-stopped: #7f8d9f;
+
+  /* Code syntax */
+  --code-string: #4ade80;
+}
+
+.dark {
+  /* Core surface tokens */
+  --background: #0e1115;
+  --foreground: #eff1f4;
+  --card: #0e1115;
+  --card-foreground: #eff1f4;
+  --popover: #22252a;
+  --popover-foreground: #e5e5e5;
+
+  /* Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #22252a;
+  --secondary-foreground: #e5e5e5;
+  --muted: #161a20;
+  --muted-foreground: #afbbcb;
+  --accent: #00266b;
+  --accent-foreground: #bfdbfe;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #333942;
+  --input: #333942;
+  --ring: #00266b;
+
+  /* Data visualization and sidebar tokens */
+  --chart-1: #60a5fa;
+  --chart-2: #3b82f6;
+  --chart-3: #2563eb;
+  --chart-4: #1d4ed8;
+  --chart-5: #1e40af;
+  --sidebar: #171717;
+  --sidebar-foreground: #e5e5e5;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #00266b;
+  --sidebar-accent-foreground: #bfdbfe;
+  --sidebar-border: #404040;
+  --sidebar-ring: #00266b;
+
+  /* Status colors (dark) */
+  --status-running: #22c55e;
+  --status-deploying: #f59e0b;
+  --status-error: #ef4444;
+  --status-stopped: #afbbcb;
+
+  /* Code syntax */
+  --code-string: #4ade80;
+}

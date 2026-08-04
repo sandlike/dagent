@@ -1,0 +1,9 @@
+# 实例部署的默认命名空间
+# 后端部署实例时会用 INSTANCE_NAMESPACE 环境变量作为目标 namespace
+# 这里创建它以便 Pod 有地方跑；各环境 overlay 覆盖 namespace 名
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opencode-instances
+  labels:
+    opencode/managed: "true"

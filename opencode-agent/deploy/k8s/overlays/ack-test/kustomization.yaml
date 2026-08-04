@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 阿里云 ACK 测试环境
+# 部署：kubectl apply -k deploy/k8s/overlays/ack-test
+
+namespace: opencode-platform-test
+
+resources:
+  - ../../base
+
+# 覆盖镜像 tag（测试环境固定 latest）
+images:
+  - name: opencode-server
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-server
+    newTag: latest
+  - name: opencode-web
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-web
+    newTag: latest
+
+# 修补 ConfigMap 和 Ingress 的环境差异
+patches:
+  # ConfigMap：测试环境专用配置
+  - target:
+      kind: ConfigMap
+      name: opencode-server-config
+    patch: |-
+      - op: replace
+        path: /data/INSTANCE_NAMESPACE
+        value: opencode-instances-test
+      - op: replace
+        path: /data/CORS_ORIGIN
+        value: http://opencode-test.internal
+  # Ingress：测试环境域名
+  - target:
+      kind: Ingress
+      name: opencode-web
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: opencode-test.internal
+
+# 测试环境副本数（单副本够用）
+replicas:
+  - name: opencode-server
+    count: 1
+  - name: opencode-web
+    count: 1

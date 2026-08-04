@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCode - 登录</title>
+    <style id="theme-vars">
+/* Source: structured-spec */
+:root {
+  /* Source: structured-spec | Core surface tokens */
+  --background: #ffffff;
+  --foreground: #0e1115;
+  --card: #ffffff;
+  --card-foreground: #0e1115;
+  --popover: #f9f9fa;
+  --popover-foreground: #0e1115;
+
+  /* Source: structured-spec | Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #eff1f4;
+  --secondary-foreground: #333942;
+  --muted: #eff1f4;
+  --muted-foreground: #7f8d9f;
+  --accent: #e5e9ff;
+  --accent-foreground: #00266b;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e7eaef;
+  --input: #e7eaef;
+  --ring: #557fff;
+
+  /* Source: structured-spec | Data visualization and sidebar tokens */
+  --chart-1: #557fff;
+  --chart-2: #0065fd;
+  --chart-3: #0057da;
+  --chart-4: #0043ad;
+  --chart-5: #002e7d;
+  --sidebar: #eff1f4;
+  --sidebar-foreground: #0e1115;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #d4daff;
+  --sidebar-accent-foreground: #00266b;
+  --sidebar-border: #e7eaef;
+  --sidebar-ring: #0065fd;
+
+  /* Source: structured-spec | Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Source: structured-spec | Radius token */
+  --radius: 1.2rem;
+
+  /* Source: structured-spec | Shadow construction tokens */
+  --shadow-x: 0;
+  --shadow-y: 1px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0;
+  --shadow-color: #0e1115;
+  --shadow-2xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(14 17 21 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow: 0 1px 0px 0px rgb(14 17 21 / 0), 0 1px 2px -1px rgb(14 17 21 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(14 17 21 / 0), 0 2px 4px -1px rgb(14 17 21 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(14 17 21 / 0), 0 4px 6px -1px rgb(14 17 21 / 0);
+  --shadow-xl: 0 1px 0px 0px rgb(14 17 21 / 0), 0 8px 10px -1px rgb(14 17 21 / 0);
+  --shadow-2xl: 0 1px 0px 0px rgb(14 17 21 / 0);
+
+  /* Source: structured-spec | Rhythm tokens */
+  --tracking-normal: 0em;
+  --spacing: 0.24rem;
+}
+
+/* Source: structured-spec */
+.dark {
+  /* Source: structured-spec | Core surface tokens */
+  --background: #0e1115;
+  --foreground: #eff1f4;
+  --card: #0e1115;
+  --card-foreground: #eff1f4;
+  --popover: #22252a;
+  --popover-foreground: #e5e5e5;
+
+  /* Source: structured-spec | Semantic brand tokens */
+  --primary: #0065fd;
+  --primary-foreground: #ffffff;
+  --secondary: #22252a;
+  --secondary-foreground: #e5e5e5;
+  --muted: #161a20;
+  --muted-foreground: #afbbcb;
+  --accent: #00266b;
+  --accent-foreground: #bfdbfe;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #333942;
+  --input: #333942;
+  --ring: #00266b;
+
+  /* Source: structured-spec | Data visualization and sidebar tokens */
+  --chart-1: #60a5fa;
+  --chart-2: #3b82f6;
+  --chart-3: #2563eb;
+  --chart-4: #1d4ed8;
+  --chart-5: #1e40af;
+  --sidebar: #171717;
+  --sidebar-foreground: #e5e5e5;
+  --sidebar-primary: #0065fd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #00266b;
+  --sidebar-accent-foreground: #bfdbfe;
+  --sidebar-border: #404040;
+  --sidebar-ring: #00266b;
+
+  /* Source: structured-spec | Typography tokens */
+  --font-sans: Stack Sans Text, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Source Serif 4, serif;
+  --font-mono: JetBrains Mono, monospace;
+
+  /* Source: structured-spec | Radius token */
+  --radius: 1.2rem;
+
+  /* Source: structured-spec | Shadow construction tokens */
+  --shadow-x: 0;
+  --shadow-y: 1px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0;
+  --shadow-color: #000000;
+  --shadow-2xs: 0 1px 0px 0px rgb(0 0 0 / 0);
+  --shadow-xs: 0 1px 0px 0px rgb(0 0 0 / 0);
+  --shadow-sm: 0 1px 0px 0px rgb(0 0 0 / 0), 0 1px 2px -1px rgb(0 0 0 / 0);
+  --shadow: 0 1px 0px 0px rgb(0 0 0 / 0), 0 1px 2px -1px rgb(0 0 0 / 0);
+  --shadow-md: 0 1px 0px 0px rgb(0 0 0 / 0), 0 2px 4px -1px rgb(0 0 0 / 0);
+  --shadow-lg: 0 1px 0px 0px rgb(0 0 0 / 0), 0 4px 6px -1px rgb(0 0 0 / 0);
+  --shadow-xl: 0 1px 0px 0px rgb(0 0 0 / 0), 0 8px 10px -1px rgb(0 0 0 / 0);
+  --shadow-2xl: 0 1px 0px 0px rgb(0 0 0 / 0);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-foreground: var(--card-foreground);
+  }
+  @layer base {
+    body { background: var(--background); color: var(--foreground); }
+    input::placeholder { color: var(--muted-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="flex items-center justify-center min-h-screen px-4" style="background: var(--background);">
+      <div class="w-full max-w-[420px] rounded-[20px] p-8 sm:p-10" style="background: var(--card); border: 1px solid var(--border);">
+        <!-- Brand -->
+        <div class="flex items-center gap-3 mb-8">
+          <span class="flex items-center justify-center w-10 h-10 rounded-[10px] text-white font-bold text-lg" style="background: var(--primary);">&lt;/&gt;</span>
+          <span class="text-xl font-bold tracking-tight" style="color: var(--foreground);">OpenCode</span>
+        </div>
+
+        <!-- Tab Switcher -->
+        <div class="flex gap-1 mb-8 p-1 rounded-full" style="background: var(--muted);">
+          <button data-dom-id="tab-login" class="flex-1 h-9 rounded-full text-sm font-semibold transition-colors duration-150" style="background: var(--primary); color: var(--primary-foreground);">登录</button>
+          <button data-dom-id="tab-register" class="flex-1 h-9 rounded-full text-sm font-medium transition-colors duration-150" style="background: transparent; color: var(--muted-foreground);">注册</button>
+        </div>
+
+        <!-- Form -->
+        <form class="flex flex-col gap-3" onsubmit="return false;">
+          <!-- Username -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-sm font-medium" style="color: var(--foreground);">用户名</label>
+            <input type="text" placeholder="请输入用户名" class="h-9 px-3 rounded-[10px] text-sm outline-none transition-colors duration-150" style="background: var(--background); border: 1px solid var(--input); color: var(--foreground);" onfocus="this.style.borderColor='var(--ring)'; this.style.boxShadow='0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent)';" onblur="this.style.borderColor='var(--input)'; this.style.boxShadow='none';" />
+          </div>
+
+          <!-- Password -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-sm font-medium" style="color: var(--foreground);">密码</label>
+            <div class="relative">
+              <input type="password" placeholder="请输入密码" class="w-full h-9 pl-3 pr-10 rounded-[10px] text-sm outline-none transition-colors duration-150" style="background: var(--background); border: 1px solid var(--input); color: var(--foreground);" onfocus="this.style.borderColor='var(--ring)'; this.style.boxShadow='0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent)';" onblur="this.style.borderColor='var(--input)'; this.style.boxShadow='none';" />
+              <i data-lucide="lock" class="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4" style="color: var(--muted-foreground);"></i>
+            </div>
+          </div>
+
+          <!-- Confirm Password (register mode) -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-sm font-medium" style="color: var(--foreground);">确认密码</label>
+            <div class="relative">
+              <input type="password" placeholder="请再次输入密码" class="w-full h-9 pl-3 pr-10 rounded-[10px] text-sm outline-none transition-colors duration-150" style="background: var(--background); border: 1px solid var(--input); color: var(--foreground);" onfocus="this.style.borderColor='var(--ring)'; this.style.boxShadow='0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent)';" onblur="this.style.borderColor='var(--input)'; this.style.boxShadow='none';" />
+              <i data-lucide="lock" class="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4" style="color: var(--muted-foreground);"></i>
+            </div>
+          </div>
+
+          <!-- Submit Button -->
+          <button data-dom-id="login-submit" type="submit" class="h-9 rounded-full text-sm font-semibold mt-2 cursor-pointer transition-all duration-150 hover:opacity-90 active:translate-y-[1px] focus-visible:outline-2 focus-visible:outline-offset-2" style="background: var(--primary); color: var(--primary-foreground); border: none; outline-color: var(--ring);">登录</button>
+        </form>
+
+        <!-- Admin Reset -->
+        <p class="mt-6 text-center text-sm" style="color: var(--muted-foreground);">管理员重置密码</p>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

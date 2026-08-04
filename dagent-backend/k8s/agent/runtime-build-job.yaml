@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dagent-opencode-runtime-build-v2
+  namespace: dagent
+  labels:
+    app.kubernetes.io/name: dagent-opencode-runtime-build
+    app.kubernetes.io/part-of: dagent
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dagent-opencode-runtime-build
+        app.kubernetes.io/part-of: dagent
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: opencode-pull-secret
+      containers:
+        - name: kaniko
+          image: gcr.m.daocloud.io/kaniko-project/executor:v1.23.2-debug
+          args:
+            - --context=dir:///workspace
+            - --dockerfile=/workspace/Dockerfile
+            - --destination=registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-test-runtime:1.15.12-v2
+            - --cache=false
+            - --compressed-caching=false
+            - --snapshot-mode=redo
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 5Gi
+          volumeMounts:
+            - name: dockerfile
+              mountPath: /workspace
+              readOnly: true
+            - name: registry-auth
+              mountPath: /kaniko/.docker/config.json
+              subPath: .dockerconfigjson
+              readOnly: true
+      volumes:
+        - name: dockerfile
+          configMap:
+            name: dagent-opencode-runtime-build-v2
+        - name: registry-auth
+          secret:
+            secretName: opencode-pull-secret
