@@ -23,6 +23,7 @@ from dagent.models import ModelRoute
 from dagent.services.model_gateway import (
     ALL_MODEL_NODES_QUOTA_EXHAUSTED,
     USER_TOTAL_BUDGET_EXHAUSTED,
+    configured_api_protocol,
     fail_model_route,
     fallback_model_route,
     reserve_model_route,
@@ -63,6 +64,168 @@ def _estimated_tokens(payload: dict[str, Any]) -> tuple[int, int]:
     output_budget = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 4096)
     output_budget = max(1, min(output_budget, 100_000))
     return input_tokens, input_tokens + output_budget
+
+
+def _responses_input(messages: object) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user")
+        if role == "tool":
+            call_id = str(message.get("tool_call_id") or "")
+            if call_id:
+                items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": _flatten_text(message.get("content")),
+                    }
+                )
+            continue
+        content = _flatten_text(message.get("content"))
+        if content:
+            items.append({"role": role, "content": content})
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": str(tool_call.get("id") or uuid4().hex),
+                        "name": str(function.get("name") or ""),
+                        "arguments": str(function.get("arguments") or "{}"),
+                    }
+                )
+    return items
+
+
+def _responses_tools(tools: object) -> list[dict[str, Any]]:
+    if not isinstance(tools, list):
+        return []
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict) or not function.get("name"):
+            continue
+        item: dict[str, Any] = {
+            "type": "function",
+            "name": function["name"],
+            "parameters": function.get("parameters") or {"type": "object", "properties": {}},
+        }
+        if function.get("description"):
+            item["description"] = function["description"]
+        if "strict" in function:
+            item["strict"] = function["strict"]
+        converted.append(item)
+    return converted
+
+
+def _responses_request(payload: dict[str, Any], model: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "model": model,
+        "input": _responses_input(payload.get("messages")),
+        "stream": False,
+    }
+    output_budget = payload.get("max_completion_tokens") or payload.get("max_tokens")
+    if output_budget is not None:
+        result["max_output_tokens"] = output_budget
+    for field in ("temperature", "top_p", "tool_choice", "parallel_tool_calls"):
+        if field in payload:
+            result[field] = payload[field]
+    tools = _responses_tools(payload.get("tools"))
+    if tools:
+        result["tools"] = tools
+    return result
+
+
+def _responses_to_chat(body: object, model: str) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise ValueError("Responses API returned a non-object response")
+    output = body.get("output")
+    if not isinstance(output, list):
+        raise ValueError("Responses API returned no output")
+    text_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            content = item.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") not in {"output_text", "text"}:
+                        continue
+                    text = block.get("text")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+        elif item.get("type") == "function_call":
+            tool_calls.append(
+                {
+                    "id": str(item.get("call_id") or item.get("id") or uuid4().hex),
+                    "type": "function",
+                    "function": {
+                        "name": str(item.get("name") or ""),
+                        "arguments": str(item.get("arguments") or "{}"),
+                    },
+                }
+            )
+    if not text_parts and not tool_calls:
+        raise ValueError("Responses API returned no assistant output")
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "\n".join(text_parts) if text_parts else None,
+    }
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    raw_usage = body.get("usage")
+    usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
+    return {
+        "id": str(body.get("id") or f"chatcmpl-{uuid4().hex}"),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": str(body.get("model") or model),
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": "tool_calls" if tool_calls else "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": int(usage.get("input_tokens") or 0),
+            "completion_tokens": int(usage.get("output_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+        },
+    }
+
+
+def _normalized_upstream_response(
+    protocol: str,
+    response: httpx.Response,
+    model: str,
+) -> tuple[bytes, str]:
+    content_type = response.headers.get("content-type", "application/json")
+    if protocol == "chat_completions" and "text/event-stream" in content_type:
+        return response.content, content_type
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ValueError(f"{protocol} returned invalid JSON") from exc
+    if protocol == "responses":
+        body = _responses_to_chat(body, model)
+    elif not isinstance(body, dict) or not isinstance(body.get("choices"), list) or not body["choices"]:
+        raise ValueError("Chat Completions API returned no choices")
+    return json.dumps(body, ensure_ascii=False).encode("utf-8"), "application/json"
 
 
 def _usage(body: bytes, content_type: str, estimated_input: int, reserved: int) -> tuple[int, int, bool]:
@@ -184,14 +347,21 @@ async def chat_completions(request: Request, session: SessionDep) -> Response:
     while True:
         route = reservation.route
         clean_payload["model"] = route.model
+        protocol = configured_api_protocol(route)
+        upstream_path = "responses" if protocol == "responses" else "chat/completions"
+        upstream_payload = (
+            _responses_request(clean_payload, route.model)
+            if protocol == "responses"
+            else clean_payload
+        )
         started = time.perf_counter()
-        credential = resolve_model_credential(route.credential_ref)
+        credential = resolve_model_credential(route.credential_ref, route.credential_ciphertext)
         headers = {"Authorization": f"Bearer {credential}"} if credential else {}
         try:
             async with httpx.AsyncClient(timeout=route.timeout_ms / 1000, follow_redirects=False) as client:
                 upstream = await client.post(
-                    urljoin(route.base_url.rstrip("/") + "/", "chat/completions"),
-                    json=clean_payload,
+                    urljoin(route.base_url.rstrip("/") + "/", upstream_path),
+                    json=upstream_payload,
                     headers=headers,
                 )
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -247,9 +417,54 @@ async def chat_completions(request: Request, session: SessionDep) -> Response:
                     status_code=upstream.status_code,
                     media_type=upstream.headers.get("content-type", "application/json"),
                 )
-            content_type = upstream.headers.get("content-type", "application/json")
+            try:
+                response_content, content_type = _normalized_upstream_response(
+                    protocol,
+                    upstream,
+                    route.model,
+                )
+            except ValueError:
+                try:
+                    reservation = await fallback_model_route(
+                        session,
+                        request_id,
+                        ModelFallbackRequest(
+                            task_id=task_id,
+                            attempt_no=reservation.attempt_no,
+                            estimated_tokens=estimated_total,
+                            estimated_input_tokens=estimated_input,
+                            output_token_budget=estimated_total - estimated_input,
+                            error_type="server_error",
+                            error_code="invalid_response",
+                            latency_ms=latency_ms,
+                            environment=environment,
+                        ),
+                    )
+                    continue
+                except DagentError as exc:
+                    await fail_model_route(
+                        session,
+                        request_id,
+                        task_id=task_id,
+                        attempt_no=reservation.attempt_no,
+                        error_type="server_error",
+                        error_code="invalid_response",
+                        latency_ms=latency_ms,
+                    )
+                    quota_response = _quota_error_response(exc)
+                    if quota_response is not None:
+                        return quota_response
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": {
+                                "message": "Model route returned an invalid response",
+                                "type": "upstream",
+                            }
+                        },
+                    )
             input_tokens, output_tokens, estimated = _usage(
-                upstream.content,
+                response_content,
                 content_type,
                 estimated_input,
                 reservation.reserved_tokens,
@@ -266,7 +481,7 @@ async def chat_completions(request: Request, session: SessionDep) -> Response:
                     usage_estimated=estimated,
                 ),
             )
-            return Response(content=upstream.content, status_code=upstream.status_code, media_type=content_type)
+            return Response(content=response_content, status_code=upstream.status_code, media_type=content_type)
         except httpx.TimeoutException:
             latency_ms = int((time.perf_counter() - started) * 1000)
             try:

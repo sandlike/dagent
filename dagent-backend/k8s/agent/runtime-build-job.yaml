@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: dagent-opencode-runtime-build-v2
+  name: dagent-opencode-runtime-build-v3
   namespace: dagent
   labels:
     app.kubernetes.io/name: dagent-opencode-runtime-build
@@ -25,7 +25,7 @@ spec:
           args:
             - --context=dir:///workspace
             - --dockerfile=/workspace/Dockerfile
-            - --destination=registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-test-runtime:1.15.12-v2
+            - --destination=registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-test-runtime:1.15.12-v3
             - --cache=false
             - --compressed-caching=false
             - --snapshot-mode=redo
@@ -47,7 +47,7 @@ spec:
       volumes:
         - name: dockerfile
           configMap:
-            name: dagent-opencode-runtime-build-v2
+            name: dagent-opencode-runtime-build-v3
         - name: registry-auth
           secret:
             secretName: opencode-pull-secret

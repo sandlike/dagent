@@ -4,17 +4,15 @@ import type {
   ModelCallLog,
   ModelFallbackError,
   ModelRoute,
+  ModelApiProtocol,
   ModelUsage,
   Page,
   ProjectModelRoute,
   AgentModelType,
-  ModelCatalogItem,
   UserAgentModelBinding,
   UserModelCallLog,
   UserModelGateway,
-  UserModelLevel,
   UserModelQuota,
-  UserModelRoute,
 } from './types'
 
 export interface ModelRouteInput {
@@ -22,6 +20,7 @@ export interface ModelRouteInput {
   provider: string
   model: string
   base_url: string
+  api_protocol: ModelApiProtocol
   priority: number
   quota_limit: number
   timeout_ms: number
@@ -31,6 +30,7 @@ export interface ModelRouteInput {
   project_ids: number[]
   environments: string[]
   credential_ref: string | null
+  api_token?: string | null
   gateway_provider_ref: string | null
   gateway_route_ref: string | null
 }
@@ -40,35 +40,13 @@ export interface ModelRouteTestResult {
   latency_ms: number
   health_status: ModelRoute['health_status']
   sample_models: string[]
+  response_preview: string | null
+  detected_api_protocol: 'chat_completions' | 'responses' | null
   message: string
-}
-
-export interface UserModelRouteInput {
-  platform_route_id: number
-  name: string
-  level: UserModelLevel
-  priority: number
-  quota_limit: number
-}
-
-export interface UserModelRouteUpdate {
-  name?: string
-  level?: UserModelLevel
-  priority?: number
-  quota_limit?: number
-  status?: UserModelRoute['status']
-  resource_version: number
 }
 
 export const modelGatewayApi = {
   myGateway: () => client.get<never, ApiResponse<UserModelGateway>>('/me/model-gateway'),
-  modelCatalog: () => client.get<never, ApiResponse<ModelCatalogItem[]>>('/me/model-catalog'),
-  createMyRoute: (data: UserModelRouteInput) =>
-    client.post<never, ApiResponse<UserModelRoute>>('/me/model-routes', data),
-  updateMyRoute: (id: number, data: UserModelRouteUpdate) =>
-    client.patch<never, ApiResponse<UserModelRoute>>(`/me/model-routes/${id}`, data),
-  testMyRoute: (id: number) =>
-    client.post<never, ApiResponse<ModelRouteTestResult>>(`/me/model-routes/${id}/test`),
   updateMySettings: (autoFallback: boolean, resourceVersion: number) =>
     client.put<never, ApiResponse<UserModelQuota>>('/me/model-gateway/settings', {
       auto_fallback: autoFallback,
@@ -83,7 +61,7 @@ export const modelGatewayApi = {
       `/me/agent-model-bindings/${agentType}`,
       { route_ids: routeIds, resource_version: resourceVersion },
     ),
-  myLogs: (params: { page?: number; page_size?: number; user_route_id?: number } = {}) =>
+  myLogs: (params: { page?: number; page_size?: number; route_id?: number } = {}) =>
     client.get<never, ApiResponse<Page<UserModelCallLog>>>('/me/model-call-logs', { params }),
   routes: (params: { page?: number; page_size?: number } = {}) =>
     client.get<never, ApiResponse<Page<ModelRoute>>>('/model-routes', { params }),

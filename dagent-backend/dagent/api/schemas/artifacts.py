@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
-
-NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class ArtifactContent(BaseModel):
@@ -153,23 +151,23 @@ class TestCasesContent(ArtifactContent):
 class ManualTestCaseContent(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    id: NonEmptyString
-    title: NonEmptyString
-    preconditions: list[NonEmptyString] = Field(min_length=1)
-    steps: list[NonEmptyString] = Field(min_length=1)
-    expected_result: NonEmptyString
-    priority: NonEmptyString
-    automated: Literal[False]
+    id: str = ""
+    title: str = ""
+    preconditions: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
+    expected_result: str = ""
+    priority: str = ""
+    automated: bool = False
 
 
 class TestPlanContent(ArtifactContent):
-    test_scope: list[NonEmptyString] = Field(min_length=1)
-    test_environment: list[NonEmptyString] = Field(min_length=1)
-    preconditions: list[NonEmptyString] = Field(min_length=1)
-    risk_points: list[NonEmptyString] = Field(min_length=1)
-    entry_criteria: list[NonEmptyString] = Field(min_length=1)
-    exit_criteria: list[NonEmptyString] = Field(min_length=1)
-    manual_test_cases: list[ManualTestCaseContent] = Field(min_length=1)
+    test_scope: list[str] = Field(default_factory=list)
+    test_environment: list[str] = Field(default_factory=list)
+    preconditions: list[str] = Field(default_factory=list)
+    risk_points: list[str] = Field(default_factory=list)
+    entry_criteria: list[str] = Field(default_factory=list)
+    exit_criteria: list[str] = Field(default_factory=list)
+    manual_test_cases: list[ManualTestCaseContent] = Field(default_factory=list)
 
 
 class TestTotals(BaseModel):

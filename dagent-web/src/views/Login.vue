@@ -1,47 +1,32 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
-import { isDemoMode } from '@/utils/env'
-import { mockUsers } from '@/mock/data'
+import { Checked, Management, Monitor, UserFilled } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
-const formRef = ref<FormInstance>()
-const loading = ref(false)
+const loadingUser = ref('')
+const accounts = [
+  { username: 'admin', label: '管理员', icon: UserFilled },
+  { username: 'pm', label: '产品经理', icon: Management },
+  { username: 'developer', label: '开发人员', icon: Monitor },
+  { username: 'qa', label: '测试人员', icon: Checked },
+]
 
-const form = reactive({
-  username: '',
-  password: '',
-})
-
-const rules: FormRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-}
-
-async function handleLogin() {
-  const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid) return
-
-  loading.value = true
+async function handleQuickLogin(username: string) {
+  loadingUser.value = username
   try {
-    await authStore.login(form)
+    await authStore.quickLogin(username)
     ElMessage.success('登录成功')
     await router.push('/')
   } catch {
     // 错误已在拦截器中处理
   } finally {
-    loading.value = false
+    loadingUser.value = ''
   }
-}
-
-function selectDemoUser(username: string) {
-  form.username = username
-  form.password = 'demo123'
 }
 </script>
 
@@ -50,54 +35,21 @@ function selectDemoUser(username: string) {
     <el-card class="login-card" shadow="hover">
       <template #header>
         <div class="login-brand">Dagent</div>
-        <el-tag v-if="isDemoMode" type="warning" style="display: block; margin-top: 8px; text-align: center" effect="plain">
-          演示模式 — 点击角色快速登录
-        </el-tag>
       </template>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="0">
-        <el-form-item prop="username">
-          <el-input
-            v-model="form.username"
-            placeholder="用户名"
-            size="large"
-            prefix-icon="User"
-          />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="密码"
-            size="large"
-            prefix-icon="Lock"
-            show-password
-            @keyup.enter="handleLogin"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            size="large"
-            style="width: 100%"
-            :loading="loading"
-            @click="handleLogin"
-          >
-            登录
-          </el-button>
-        </el-form-item>
-      </el-form>
-
-      <!-- 演示模式：角色快速选择 -->
-      <div v-if="isDemoMode" style="margin-top: 8px">
-        <div style="font-size: 12px; color: #909399; text-align: center; margin-bottom: 8px">快速选择角色：</div>
-        <el-row :gutter="8">
-          <el-col :span="6" v-for="user in mockUsers" :key="user.id">
-            <el-button size="small" text @click="selectDemoUser(user.username)" style="width: 100%">
-              {{ user.username }}<br/>
-              <el-tag size="small" type="info">{{ user.role }}</el-tag>
-            </el-button>
-          </el-col>
-        </el-row>
+      <div class="account-list">
+        <el-button
+          v-for="account in accounts"
+          :key="account.username"
+          class="account-button"
+          size="large"
+          :icon="account.icon"
+          :loading="loadingUser === account.username"
+          :disabled="Boolean(loadingUser)"
+          @click="handleQuickLogin(account.username)"
+        >
+          <span>{{ account.label }}</span>
+          <span class="account-name">{{ account.username }}</span>
+        </el-button>
       </div>
     </el-card>
   </div>
@@ -123,5 +75,27 @@ function selectDemoUser(username: string) {
   font-size: 28px;
   font-weight: 700;
   text-align: center;
+}
+
+.account-list {
+  display: grid;
+  gap: 12px;
+}
+
+.account-button {
+  width: 100%;
+  height: 52px;
+  margin: 0;
+  justify-content: flex-start;
+}
+
+.account-button :deep(.el-icon) {
+  margin-right: 10px;
+}
+
+.account-name {
+  margin-left: auto;
+  color: #8a9199;
+  font-size: 13px;
 }
 </style>

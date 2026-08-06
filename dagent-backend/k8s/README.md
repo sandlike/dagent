@@ -5,7 +5,7 @@ This overlay deploys these workloads into the `dagent` namespace:
 - One Dagent backend replica exposed by a ClusterIP Service
 - Two Nginx frontend replicas exposed by an approved HTTPS test tunnel
 - One persistent requirement-clarification OpenCode Pod
-- One persistent development OpenCode Pod with workspace manager and task monitor sidecars
+- One persistent development OpenCode Pod with workspace manager sidecar and monitoring handled by the cluster
 - An `ExternalName` Service named `mysql` that resolves to the existing Alibaba Cloud RDS endpoint
 
 Redis is not required by this implementation. MySQL is provided by RDS rather than a MySQL Pod in ACK.

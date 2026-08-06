@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from dagent.api.deps import (
@@ -14,10 +13,6 @@ from dagent.api.deps import (
 from dagent.api.errors import ConflictError, InvalidStateError, NotFoundError
 from dagent.api.schemas.artifacts import (
     TASK_ARTIFACT_TYPES,
-    format_validation_error,
-    normalize_artifact_content,
-    reconcile_development_report,
-    validate_development_report,
 )
 from dagent.api.schemas.common import ApiResponse, Page
 from dagent.api.schemas.domain import AgentTaskRead, TaskResultRequest
@@ -37,6 +32,7 @@ from dagent.services.domain import (
     get_requirement,
     transition_requirement,
 )
+from dagent.services.redaction import redact_sensitive_text
 
 router = APIRouter()
 
@@ -83,10 +79,16 @@ async def retry_task(
         requested_by=user.id,
     )
     if created:
+        previous_error = redact_sensitive_text(task.error_message).strip()
         retry.checkpoint = {
             **task.checkpoint,
             **retry.checkpoint,
             "retry_of_task_id": task.id,
+            "retry_context": {
+                "previous_task_id": task.id,
+                "previous_status": task.status,
+                "previous_error": previous_error,
+            },
         }
         retry.retry_count = task.retry_count + 1
         add_audit_log(
@@ -232,8 +234,6 @@ async def record_task_result(
         requirement.version += 1
         pipeline.run_status = RunStatus.FAILED.value
     elif task.task_type == "clarification_generate":
-        if not payload.clarification_questions:
-            raise ConflictError("Clarification generation must return at least one question")
         last_round_no = (
             await session.scalar(
                 select(func.max(ClarificationRound.round_no)).where(ClarificationRound.requirement_id == requirement.id)
@@ -247,19 +247,34 @@ async def record_task_result(
         )
         session.add(round_item)
         await session.flush()
-        session.add_all(
-            [
+        raw_questions = payload.clarification_questions
+        if not isinstance(raw_questions, list):
+            raw_questions = []
+        for item in raw_questions:
+            if isinstance(item, dict):
+                question = str(item.get("question") or item.get("title") or "")
+                question_type = str(item.get("question_type") or item.get("type") or "text")
+                if question_type not in {"single", "multiple", "text", "file"}:
+                    question_type = "text"
+                options = item.get("options") if isinstance(item.get("options"), list) else []
+                required = bool(item.get("required", True))
+                recommendation = str(item.get("ai_recommendation") or "")
+            else:
+                question = str(item)
+                question_type = "text"
+                options = []
+                required = True
+                recommendation = ""
+            session.add(
                 ClarificationQuestion(
                     round_id=round_item.id,
-                    question=item.question,
-                    question_type=item.question_type,
-                    required=item.required,
-                    options=item.options,
-                    ai_recommendation=item.ai_recommendation,
+                    question=question,
+                    question_type=question_type,
+                    required=required,
+                    options=options,
+                    ai_recommendation=recommendation,
                 )
-                for item in payload.clarification_questions
-            ]
-        )
+            )
         task.status = "succeeded"
         requirement.run_status = RunStatus.WAITING_HUMAN.value
         requirement.version += 1
@@ -268,32 +283,16 @@ async def record_task_result(
         expected_artifact = TASK_ARTIFACT_TYPES.get(task.task_type)
         if expected_artifact is None:
             raise ConflictError(f"Unsupported task type '{task.task_type}'")
-        if payload.artifact_type and payload.artifact_type != expected_artifact:
-            raise ConflictError(f"Task must produce artifact type '{expected_artifact}'")
-        if payload.artifact_content is None:
-            raise ConflictError("A successful task result must include artifact content")
-        try:
-            normalized_content = normalize_artifact_content(expected_artifact, payload.artifact_content)
-            if task.task_type in {"development", "failure_fix"}:
-                if not isinstance(normalized_content, dict):
-                    raise ValueError("Development result must be a JSON object")
-                reconcile_development_report(normalized_content)
-                validate_development_report(normalized_content)
-            artifact_version = await add_artifact_version(
-                session,
-                requirement,
-                artifact_type=expected_artifact,
-                content=normalized_content,
-                source="agent",
-                source_ref=f"agent-task:{task.id}",
-                created_by=None,
-            )
-        except ValidationError as exc:
-            if task.task_type != "test_plan_generation":
-                raise
-            raise ConflictError(f"Test plan validation failed: {format_validation_error(exc)}") from exc
-        except ValueError as exc:
-            raise ConflictError(str(exc)) from exc
+        artifact_version = await add_artifact_version(
+            session,
+            requirement,
+            artifact_type=expected_artifact,
+            content=payload.artifact_content,
+            source="agent",
+            source_ref=f"agent-task:{task.id}",
+            created_by=None,
+            normalize=False,
+        )
         artifact_versions = {expected_artifact: artifact_version.version}
         await transition_requirement(
             session,

@@ -99,7 +99,7 @@ spec:
       volumes:
         - name: frontend-bundle
           configMap:
-            name: dagent-frontend-bundle-v15
+            name: dagent-frontend-bundle-v32
         - name: nginx-config
           configMap:
             name: dagent-frontend-nginx

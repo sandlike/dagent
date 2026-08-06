@@ -17,7 +17,7 @@
 本文档重点解决以下问题：
 
 1. 明确项目空间、需求、两个主 Agent、长期 Session、AgentTask 和代码工作区之间的关系。
-2. 将研发流程调整为“需求澄清、开发文档审批、开发与最小检查、开发报告审批、人工测试与最终验收”。
+2. 将研发流程调整为“需求澄清、开发文档审批、开发与最小检查、开发报告审批、测试方案审批、人工测试与最终验收”。
 3. 明确需求澄清、开发两个默认主 Agent 及其 Skills、MCP 和权限边界。
 4. 明确后端通过 OpenCode Server HTTP API 调用两个独立的长期 OpenCode 服务，不为每个需求动态创建 K8S Pod。
 5. 明确多需求并行开发、同文件冲突处理和合并队列机制。
@@ -317,23 +317,30 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 
 ### 4.9 API 网关管理
 
-#### 4.9.1 我的模型与额度
+#### 4.9.1 平台模型与额度
 
 - 每个用户独立保存 Token 总预算、是否启用硬限制、已用、预占、剩余和重置时间；总预算可配置，也可以关闭硬限制。任何用户的使用量不得占用其他用户额度。
-- 用户模型节点引用平台模型路由，保存个人名称、模型级别、优先级、节点额度和启停状态；多个逻辑节点可以引用同一个 `glm-4.7-flash` 验证切换链路。
+- 平台模型路由是唯一可调用模型节点，直接保存名称、供应商、模型、平台优先级、节点额度、健康状态和启停状态；不再创建或维护“我的模型”副本，也不提供普通用户添加模型入口。
+- 平台模型节点额度是跨用户共享的资源额度，所有调用都原子更新平台节点的预占量和已用量；用户总预算只负责该用户的独立统计或可选硬限制。
 - 页面只返回 `credential_configured`，不返回 Base URL、API Key、密钥引用或密文。
+- 管理员可在“平台模型配置”页面新增或编辑模型，填写节点名称、供应商标识、模型名称、API 根地址、API Token、API 协议、平台优先级和节点额度；API Token 只写入请求，后端使用现有 Fernet 密钥加密保存，任何响应、日志和普通用户页面都不返回原文。API 根地址只填写到 `/v1` 等公共前缀，不填写 `/responses` 或 `/chat/completions`。
+- 平台模型新增或修改连接信息后默认停用，管理员必须先执行连接验证，验证成功后才能启用；系统不再使用固定域名白名单限制 Base URL。
+- API 协议支持 `auto`、`chat_completions` 和 `responses`。选择 `auto` 时，真实验证先请求 Chat Completions，未得到有效 JSON 文本后再请求 Responses；成功后保存检测到的协议。验证必须发送最小真实请求并收到非空文本才标记为 `healthy`，HTTP 200 但返回 HTML、空 `choices` 或空 `output` 都标记为 `unhealthy`。
+- Agent 内部统一使用 Chat Completions 契约；当路由协议为 Responses 时，Dagent 网关把消息、工具和输出预算转换为 Responses 请求，再把文本、工具调用和 Token 用量转换回 Chat Completions，避免 OpenCode 适配不同上游协议。
 
 #### 4.9.2 Agent 绑定与自动切换
 
-- 用户分别为需求澄清、开发 Agent 保存有序模型节点列表，配置维度为“用户 + Agent 类型”。
+- 用户分别为需求澄清、开发 Agent 保存有序平台模型 ID 列表，配置维度为“用户 + Agent 类型”；绑定直接指向 `model_route.id`。
+- 列表位置就是该 Agent 的调用优先级，从 1 开始且连续；同一 Agent 内不得出现重复节点或重复优先级。两个 Agent 的列表互相独立，同一节点可以在不同 Agent 中处于不同位置。
+- 模型节点声明了适用 Agent 类型时，后端必须拒绝把节点绑定到其他 Agent；选路时再次校验适用范围。
 - 自动切换开关属于用户，不影响其他用户；关闭后只尝试绑定列表第一项。
 - 网关按 Agent 绑定顺序计算“预计输入 + 最大输出预算”；节点额度不足时继续检查下一个节点，不受已关闭的用户总预算硬限制影响。
 - 限流、超时、上游不可用、5xx 或 API Key 失效时释放当前预留并切换一次，普通业务 4xx 不切换。
-- 普通用户可以调整个人节点优先级、备用顺序、节点额度、启停状态并执行连接验证；平台 Base URL/API Key 仍由管理员安全保存。
+- 普通用户可以分别调整两个 Agent 的主备顺序；平台模型额度、启停状态和连接验证由管理员维护，平台 Base URL/API Key 仍由管理员安全保存。
 
 #### 4.9.3 使用与切换记录
 
-- 按当前用户、个人模型节点、实际模型、Agent、项目、需求和时间查看调用量。
+- 按当前用户、平台模型节点、实际模型、Agent、项目、需求和时间查看调用量。
 - 展示实际使用节点、预计输入、输出预算、预留 Token、实际 Token、释放 Token 和节点剩余额度。
 - 展示 `fallback_from`、429、超时、上游 5xx、鉴权失败、节点配额耗尽及切换原因。
 - 不在前端展示完整密钥。
@@ -361,8 +368,9 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 | 5 | `development` | 开发 | 开发 Agent + Developer | 代码、开发报告、最小单元/冒烟证据 |
 | 6 | `development_report_review` | 开发报告审批 | Developer/指定审批人 | 检查清单、审批记录 |
 | 7 | `test_plan_generation` | 测试方案生成 | 开发 Agent | 测试方案、人工测试用例 |
-| 8 | `final_acceptance` | 人工测试与最终验收 | QA、PM/需求方 | 人工测试结论、验收记录、推送结果 |
-| 9 | `completed` | 已完成 | 系统 | 完成时间、最终产物清单 |
+| 8 | `test_plan_review` | 测试方案审批 | QA、PM/需求方 | 审批意见、确认版本 |
+| 9 | `final_acceptance` | 人工测试与最终验收 | QA、PM/需求方 | 人工测试结论、验收记录、推送结果 |
+| 10 | `completed` | 已完成 | 系统 | 完成时间、最终产物清单 |
 
 `branch_creation`、`code_generation`、`code_review` 是开发阶段内部步骤，可在详情页展开显示，但不作为一级业务阶段。
 
@@ -381,6 +389,7 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 - Agent 根据答案更新需求文档，保留原问题、回答和更新差异。
 - 用户确认需求描述已清楚后进入开发文档生成。
 - 用户认为仍不清楚时可以继续发起下一轮澄清。
+- 开发文档被驳回并退回需求澄清后，即使上一轮已是 `confirmed`，页面也必须提供“根据驳回意见生成新一轮澄清问题”按钮；新一轮沿用原需求 Session，确认后生成新的需求文档版本，不覆盖旧版本。
 
 ### 5.4 开发文档生成与审批
 
@@ -413,7 +422,7 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 6. 提交功能分支，但在最终验收通过前不推送远端。
 7. 生成开发报告和实现检查清单；此阶段不生成或校验人工测试用例。
 
-开发阶段支持暂停、恢复、重试和人工接管。失败任务不得自动从头重复造成重复提交；重试应从可恢复检查点继续。
+开发阶段支持暂停、恢复、重试和人工接管。失败任务不得自动从头重复造成重复提交；重试应从可恢复检查点继续。当前阶段最新一次 AgentTask 失败后，用户再次点击该阶段的主操作按钮时必须调用重试接口，不能创建缺少失败信息的普通任务。创建重试 AgentTask 时，后端必须把上一任务 ID、状态和脱敏后的最终错误写入重试上下文，并明确提示同一 Development Session：已有代码改动应继续复用，不得重复实现；应直接修正错误，在正确仓库目录重新执行最小单元测试和冒烟测试。
 
 ### 5.6 开发报告审批
 
@@ -448,7 +457,8 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 - 每条人工测试用例必须包含编号 `id`、标题 `title`、前置条件 `preconditions`、操作步骤 `steps`、预期结果 `expected_result`、优先级 `priority`，并且 `automated=false`。
 - 测试方案 JSON 不合法或字段缺失时，后端把具体校验错误发送给同一个 Development Agent，只允许补正一次；第二次仍不合格才将任务标记为失败。
 - 所有主 Agent 的最终 JSON 中，可读文本必须严格使用英文，即使需求、用户输入、仓库内容或审批意见是中文；后端发现中文可读文本时将具体错误回传同一 Session 补正一次。代码路径、命令、URL 和提交标识按原值保留。
-- 测试方案生成成功后进入 `final_acceptance`。QA/需求方按方案人工测试，再由有权限的用户确认或驳回最终验收。
+- 测试方案生成成功后进入 `test_plan_review`。QA/PM 审批通过后才进入 `final_acceptance`；审批不满意时必须填写意见并回到 `test_plan_generation`，Development Agent 复用原 `development_session` 生成新的 `test_plan` 版本，旧版本继续保留。
+- 进入 `final_acceptance` 后，QA/需求方按已审批方案人工测试，再由有权限的用户确认或驳回最终验收。
 - 人工发现问题或最终验收驳回时回到 `development`，创建新的 `failure_fix` AgentTask 并复用原 `development_session`。
 - OpenCode 一次工具循环可能生成多条 Assistant 消息；后端发送任务前记录已有消息 ID，随后只轮询和聚合本次新增消息，直至最终消息 `finish=stop`。
 - OpenCode 1.15.12 的消息请求不得携带 `format.type=json_schema`。Agent 仍由提示词要求返回 JSON，最终 JSON 解析、规范化和 Pydantic 校验由 Dagent 后端完成。
@@ -458,6 +468,7 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 
 - 页面展示完整产物清单、测试结论、PR/MR 和未关闭风险。
 - 用户必须主动点击“验收通过并提交”并再次确认。
+- 需求澄清确认、开发文档审批通过、开发报告审批通过、测试方案审批通过和最终验收通过都必须在提交前再次显示“不能撤销或回退”的明确确认按钮。
 - 确认时记录验收人、时间、意见和所验收的产物版本。
 - 验收通过后由后端推送需求关联的全部功能分支；全部推送成功后自动进入 `completed`，完成态不可由 Agent 或单独的人工“完成”按钮触发。
 - 任一推送失败时保持 `final_acceptance`，运行状态标记为交付失败并允许重试，不写入完成时间。
@@ -480,7 +491,9 @@ Dagent 是面向企业研发团队的 AI 驱动研发自动化平台。平台以
 | 开发文档审批 | 驳回 | 需求描述/澄清 |
 | 开发报告审批 | 驳回 | 开发 |
 | 开发报告审批 | 通过 | 测试方案生成 |
-| 测试方案生成 | 方案校验通过 | 最终验收 |
+| 测试方案生成 | 方案校验通过 | 测试方案审批 |
+| 测试方案审批 | 驳回并填写意见 | 测试方案生成 |
+| 测试方案审批 | 通过 | 最终验收 |
 | 最终验收 | 不通过 | 开发 |
 | 任一人工门禁 | 转交 | 当前阶段 |
 | 最终验收 | 确认通过且全部推送成功 | 已完成 |
@@ -761,15 +774,12 @@ K8S 用于部署和保障长期运行的 `dagent-web`、`dagent-backend` 和 `da
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/api/v1/me/model-gateway` | 当前用户总预算设置、个人模型节点和两类 Agent 绑定 |
-| GET | `/api/v1/me/model-catalog` | 当前用户可选择的平台模型目录；不返回连接地址或密钥 |
-| POST/PATCH | `/api/v1/me/model-routes`、`/api/v1/me/model-routes/{id}` | 添加或调整个人逻辑模型节点 |
-| POST | `/api/v1/me/model-routes/{id}/test` | 以平台密钥验证当前用户节点连接 |
+| GET | `/api/v1/me/model-gateway` | 当前用户总预算设置、可用平台模型和两类 Agent 绑定 |
 | PUT | `/api/v1/me/agent-model-bindings/{agent_type}` | 保存当前用户某类 Agent 的有序模型节点 |
 | PUT | `/api/v1/me/model-gateway/settings` | 设置当前用户自动切换开关 |
 | GET | `/api/v1/me/model-call-logs` | 当前用户调用、失败和切换记录 |
 | PUT | `/api/v1/users/{user_id}/model-quota` | 管理员调整指定用户总预算、硬限制开关和重置时间 |
-| GET/POST/PATCH | `/api/v1/model-routes...` | 管理员维护平台供应商路由；普通用户不可访问 |
+| GET/POST/PATCH | `/api/v1/model-routes...` | 管理员维护平台供应商路由和加密 API Token；普通用户不可访问 |
 
 ### 9.9 后端流程约束
 
@@ -810,12 +820,12 @@ K8S 用于部署和保障长期运行的 `dagent-web`、`dagent-backend` 和 `da
 | `agent_task` | id, session_id, requested_by, task_type, stage, status, input_summary, output_summary, started_at, completed_at, checkpoint, retry_count | 每次操作的独立执行、模型计费归属与审计记录 |
 | `git_workspace` | requirement_id, repository_id, branch, path_ref, base_commit | 需求代码隔离 |
 | `merge_queue_item` | requirement_id, target_branch, status, order_no | 合并队列 |
-| `model_route` | provider, model, base_url, priority, credential_ref, health_status | 管理员维护的平台供应商路由；密钥不下发用户 |
+| `model_route` | provider, model, base_url, api_protocol, detected_api_protocol, priority, credential_ref, credential_ciphertext, health_status | 管理员维护的平台供应商路由；API 协议和验证结果按节点保存，Token 使用密文保存，密钥不下发用户 |
 | `user_model_quota` | tenant_id, user_id, quota_limit, hard_limit_enabled, quota_reserved, quota_used, reset_at, auto_fallback | 用户独立总预算、可选硬限制和自动切换设置 |
-| `user_model_route` | user_id, model_route_id, name, level, priority, quota_limit, quota_used, status | 用户模型池中的逻辑节点，可多个节点引用同一平台模型 |
+| `user_model_route` | user_id, model_route_id, name, level, priority, quota_limit, quota_used, status | 历史兼容表，仅用于迁移旧绑定，不参与新调用 |
 | `user_agent_model_binding` | user_id, agent_type, route_ids, version | 用户为需求澄清、开发 Agent 保存的有序节点列表 |
-| `model_quota_ledger` | user_id, user_route_id, route_id, reserved, actual, released, request_id | 用户与逻辑节点双层配额账本 |
-| `model_call_log` | user_id, agent_type, user_route_id, route_id, task_id, estimated_input_tokens, output_token_budget, reserved_tokens, input_tokens, output_tokens, released_tokens, latency, result, fallback_from_user_route_id, fallback_reason | 用户维度调用审计 |
+| `model_quota_ledger` | user_id, route_id, reserved, actual, released, request_id | 用户统计与平台模型节点额度账本 |
+| `model_call_log` | user_id, agent_type, route_id, task_id, estimated_input_tokens, output_token_budget, reserved_tokens, input_tokens, output_tokens, released_tokens, latency, result, fallback_from_route_id, fallback_reason | 用户维度的平台模型调用审计 |
 | `external_sync_task` | target, business_id, action, status, retry_count | Git 平台等外部操作的同步任务 |
 | `audit_log` | actor, action, resource, before_ref, after_ref, trace_id | 审计日志 |
 
@@ -847,6 +857,8 @@ K8S 用于部署和保障长期运行的 `dagent-web`、`dagent-backend` 和 `da
 - 会话、消息、工具调用和任务状态与 Dagent 业务 ID 关联。
 - Agent 权限由 OpenCode 配置与 Dagent 后端双重限制。
 - 禁止 OpenCode `task` 工具和子 Agent 调用；需求澄清与开发 Agent 分别路由到独立 OpenCode 服务。
+- Development Pod 内的 `monitor-sidecar` 不参与业务调用，但当前 `/metrics` 正由集群监控采集，因此保留；OpenCode 的业务健康检查仍直接检查 `4096` 端口。
+- `workspace-manager` 与 OpenCode 共享同一持久化 `/workspaces`，负责受控的仓库准备、状态检查、提交、推送和合并；它不是第二套工作区。
 - 后端保存 OpenCode 返回的工具调用证据用于日志和后续审计；当前不将工具证据与 Agent 最终报告逐条匹配，也不作为任务成功门禁。
 - 对多步工具任务，后端必须轮询同一 Session 的新增消息直到最终 Assistant 消息结束，并排除该长期 Session 的历史任务消息。
 
@@ -1013,14 +1025,14 @@ K8S 用于部署和保障长期运行的 `dagent-web`、`dagent-backend` 和 `da
 ### 14.5 API 网关验收
 
 1. 普通用户可以进入模型网关，并查看自己的总预算是否启用硬限制、节点用量、重置时间和 API Key 配置状态。
-2. 需求澄清、开发 Agent 可以分别保存个人模型节点顺序，任何修改不得影响其他用户。
-3. 用户 A 的调用只结算用户 A 的总用量和节点额度，用户 B 的剩余额度保持不变。
-4. 第一节点额度不足、401/403、429、超时、连接失败或 5xx 时，自动切换同一用户绑定的下一节点；普通业务 4xx 不切换。
+2. 需求澄清、开发 Agent 可以分别保存平台模型节点顺序，绑定直接使用平台 `model_route.id`，任何用户只能调整自己的绑定顺序。
+3. 用户 A 的调用只结算用户 A 的总用量，同时原子结算实际使用的平台模型节点额度；用户 B 的总预算统计保持独立。
+4. 第一节点额度不足、401/403、429、超时、连接失败或 5xx 时，自动切换当前 Agent 绑定的下一个平台模型；普通业务 4xx 不切换。
 5. 主节点额度不足时不结束请求，继续检查备用节点；所有绑定节点都不足时返回不可重试的“所有模型节点额度不足”。
 6. 用户总预算硬限制关闭时，总预算剩余不足不得阻断节点切换；硬限制开启时不足则明确返回“用户总预算不足”。
-7. 当前主备逻辑节点都可以使用 `glm-4.7-flash`，调用记录必须包含用户、Agent、实际节点、预计输入、输出预算、预留量、实际用量、尝试序号、切换来源和原因。
+7. 当前主备平台模型都可以使用 `glm-4.7-flash`，调用记录必须包含用户、Agent、平台路由、实际模型、预计输入、输出预算、预留量、实际用量、尝试序号、切换来源和原因。
 8. 上游 401/403、429、超时、连接失败或 5xx 最多切换一次；失败节点和最终节点的预留都必须正确释放或结算。
-9. 并发调用不会超卖启用的用户总预算硬限制或个人节点额度，前端和普通用户 API 都不能查看 Base URL、API Key 原文或密钥引用。
+9. 并发调用不会超卖启用的用户总预算硬限制或平台模型节点额度，前端和普通用户 API 都不能查看 Base URL、API Key 原文或密钥引用。
 10. 主、备节点共用同一个 GLM API Key 时只视为内部额度切换验证；正式容灾必须使用独立上游凭据或独立服务额度。
 
 ### 14.6 最小检查与人工测试验收
@@ -1117,6 +1129,7 @@ K8S 用于部署和保障长期运行的 `dagent-web`、`dagent-backend` 和 `da
 | 开发 | 需求详情 | Agent/Git | agent_task, git_workspace | 独立工作区、可重试 |
 | 开发报告 | 需求详情 | Artifact/Review | artifact, review_record | 人工审批后生成结构化测试交接 |
 | 测试方案生成 | 需求详情 | Development Agent/OpenCode | development_session, agent_task, artifact | 只生成方案与人工用例；字段缺失时同 Session 补正一次 |
+| 测试方案审批 | 需求详情 | Review/Pipeline | review_record, stage_history, artifact | 驳回意见回传原 Development Session 并生成新版本 |
 | 最终验收 | 需求详情 | Review/Pipeline | review_record, stage_history | 人工确认才完成 |
 | Agent 管理 | Agent 管理 | Agent Config | agent_definition, agent_version | 发布版本不可原地修改 |
 | API 网关 | API 网关 | Model Gateway | model_route, quota_ledger | 配额耗尽自动切换 |
@@ -1157,3 +1170,12 @@ K8S 用于部署和保障长期运行的 `dagent-web`、`dagent-backend` 和 `da
 | v2.2-draft.16 | 2026-08-03 | 修复只读工作区误判 | 只读任务结束后保留 Git HEAD 校验，移除已提交变更列表与当前未提交文件列表的错误比较，避免测试方案阶段把干净工作区误判为被 Agent 修改 |
 | v2.2-draft.17 | 2026-08-03 | 测试方案交互与英文契约 | 开发报告审批后不再自动创建测试方案任务，改为用户点击“生成测试方案”；仓库绑定只接受仓库主地址并单独填写默认分支；所有 Agent 最终 JSON 的可读文本强制使用英文，中文输出同 Session 最多补正一次 |
 | v2.2-draft.18 | 2026-08-04 | 开放开发 Bash 命令 | Development Agent 写模式移除 Bash 命令白名单并改为默认允许；后端只按任务模式开关 Bash，不校验命令文本；只读模式继续禁用 Bash，OpenCode 仅保留推送、重置、合并和递归删除等危险命令拒绝 |
+| v2.2-draft.19 | 2026-08-04 | Agent 独立模型顺序与重试上下文 | 模型优先级改为每个 Agent 绑定列表的独立连续顺序，禁止重复节点并校验节点适用 Agent；失败重试把脱敏后的上一任务最终错误加入提示词，要求复用已有改动并直接修正；确认 monitor-sidecar 的 metrics 正被采集后予以保留 |
+| v2.2-draft.20 | 2026-08-04 | 审批闭环与阶段按钮重试 | 增加测试方案审批，驳回意见回到测试方案生成并形成新版本；所有通过/验收操作增加不可回退二次确认；当前阶段最新任务失败后主按钮直接走带原错误的重试；开发文档驳回后前端允许从已确认轮次启动新一轮澄清；monitor-sidecar 因 metrics 仍被采集继续保留 |
+| v2.2-draft.21 | 2026-08-05 | 管理员新增平台模型 | 模型网关增加管理员平台模型配置页面，支持填写 Base URL、模型名称和 API Token；Token 使用现有 Fernet 密钥加密入库，响应不回显，连接验证成功后才允许启用；普通用户使用后台自动同步的已启用平台模型节点 |
+| v2.2-draft.22 | 2026-08-05 | 简化模型接入 | 移除普通用户手动“添加模型”入口和模型目录接口；管理员启用平台模型后，后台自动为每个用户补齐对应模型节点，用户只维护 Agent 独立顺序与节点额度 |
+| v2.2-draft.23 | 2026-08-05 | 取消模型域名白名单 | 删除 `MODEL_ROUTE_ALLOWED_HOSTS` 配置及连接验证中的固定域名限制，管理员配置的合法 HTTP(S) Base URL 可直接执行连接验证 |
+| v2.2-draft.24 | 2026-08-05 | 统一平台模型额度 | 删除“我的模型”运行时副本和用户模型编辑/验证接口；平台模型直接持有节点额度，Agent 绑定直接保存平台模型 ID；调用日志和配额账本统一记录平台路由，保留旧用户模型表仅用于历史绑定迁移 |
+| v2.2-draft.25 | 2026-08-05 | 平台模型真实验证 | 平台模型验证从仅检查 `/models` 改为追加最小 Chat Completions 请求；必须收到非空文本才算健康，前端展示真实响应摘要，失败信息脱敏 |
+| v2.2-draft.26 | 2026-08-05 | 多协议模型接入 | 平台模型增加 `auto`、Chat Completions、Responses API 协议；真实验证自动识别并保存协议；Responses 请求由网关转换为 OpenCode 使用的 Chat Completions 契约 |
+| v2.2-draft.27 | 2026-08-05 | GLM 路由验证预算 | 平台模型真实验证的最大输出预算提高到 256 Token，避免 GLM 推理内容占满过小预算而被误判为空响应；GLM-4.7 Flash 固定使用 Chat Completions 协议 |

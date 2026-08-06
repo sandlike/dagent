@@ -256,6 +256,116 @@ async def test_opencode_history_poll_stops_before_next_request_when_task_is_canc
         )
 
 
+async def test_opencode_history_progress_is_logged_once_for_repeated_snapshots(monkeypatch):
+    runtime = AgentRuntime(get_settings())
+    logs = []
+    command = "pytest -q tests/test_login.py"
+    running_history = [
+        {
+            "info": {"id": "step-1", "role": "assistant", "finish": "tool-calls"},
+            "parts": [
+                {"type": "text", "text": "Inspecting the workspace"},
+                {
+                    "type": "tool",
+                    "tool": "bash",
+                    "state": {"status": "running", "input": {"command": command}},
+                },
+            ],
+        }
+    ]
+    final_history = [
+        *running_history,
+        {
+            "info": {"id": "step-2", "role": "assistant", "finish": "stop"},
+            "parts": [{"type": "text", "text": "The task is complete"}],
+        },
+    ]
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        def __init__(self):
+            self.responses = [Response(running_history), Response(running_history), Response(final_history)]
+
+        async def get(self, *args, **kwargs):
+            return self.responses.pop(0)
+
+    async def log(task_id, level, message):
+        logs.append((level, message))
+
+    async def not_cancelled(task_id):
+        return None
+
+    monkeypatch.setattr(runtime, "_log", log)
+    monkeypatch.setattr(runtime, "_raise_if_task_cancelled", not_cancelled)
+    payload = await runtime._wait_for_message_completion(
+        Client(),
+        "http://opencode/session/ses-new/message",
+        "/workspaces/requirement-3",
+        3,
+        set(),
+        {},
+    )
+
+    assert payload["info"]["id"] == "step-2"
+    assert sum("Inspecting the workspace" in message for _, message in logs) == 1
+    assert sum(command in message for _, message in logs) == 1
+    assert sum("status: tool-calls" in message for _, message in logs) == 1
+    assert sum("The task is complete" in message for _, message in logs) == 1
+    assert sum("status: stop" in message for _, message in logs) == 1
+
+
+async def test_opencode_unknown_empty_message_is_visible_in_task_log(monkeypatch):
+    settings = get_settings().model_copy(update={"AGENT_TASK_TIMEOUT_SECONDS": 0})
+    runtime = AgentRuntime(settings)
+    logs = []
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return [{"info": {"id": "empty", "role": "assistant", "finish": "unknown"}, "parts": []}]
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        async def get(self, *args, **kwargs):
+            return Response()
+
+    async def log(task_id, level, message):
+        logs.append((level, message))
+
+    async def not_cancelled(task_id):
+        return None
+
+    monkeypatch.setattr(runtime, "_log", log)
+    monkeypatch.setattr(runtime, "_raise_if_task_cancelled", not_cancelled)
+    with pytest.raises(TimeoutError):
+        await runtime._wait_for_message_completion(
+            Client(),
+            "http://opencode/session/ses-empty/message",
+            "/workspaces/requirement-3",
+            3,
+            set(),
+            {},
+        )
+
+    assert any("status: unknown" in message for _, message in logs)
+
+
 async def test_cancelled_agent_execution_does_not_report_a_failed_result(monkeypatch):
     runtime = AgentRuntime(get_settings())
     reports = []
@@ -342,6 +452,38 @@ def test_agent_prompt_contains_review_feedback():
     assert "even when the requirement, user input" in prompt
 
 
+def test_development_retry_prompt_contains_redacted_previous_failure_and_reuses_work():
+    runtime = AgentRuntime(get_settings())
+    prompt = runtime._build_prompt(
+        {
+            "task_id": 64,
+            "requirement_id": 8,
+            "title": "Retry development",
+            "description": "Finish the existing implementation.",
+            "input_summary": "Retry the failed development task",
+            "workspace_root": "/workspaces/tenant-1/requirement-8",
+            "workspaces": [],
+            "artifacts": {},
+            "review_feedback": [],
+            "checkpoint": {
+                "agent_snapshot": {},
+                "retry_context": {
+                    "previous_task_id": 63,
+                    "previous_status": "failed",
+                    "previous_error": "tests_passed must be true; token=private-value",
+                },
+            },
+            "task_type": "development",
+        }
+    )
+    assert "This is a retry of task #63" in prompt
+    assert "tests_passed must be true" in prompt
+    assert "token=<redacted>" in prompt
+    assert "private-value" not in prompt
+    assert "Existing code changes from the previous attempt are preserved" in prompt
+    assert "use the correct repository directory" in prompt
+
+
 def test_agent_runtime_accepts_both_opencode_structured_output_fields():
     runtime = AgentRuntime(get_settings())
     expected = {"output_summary": "ready", "artifact_content": {"scope": []}}
@@ -362,7 +504,7 @@ def test_agent_runtime_surfaces_opencode_errors():
         raise AssertionError("OpenCode error response must fail the task")
 
 
-def test_clarification_result_repairs_unescaped_quotes_from_llm():
+def test_non_json_agent_result_is_preserved_as_raw_text():
     runtime = AgentRuntime(get_settings())
     response = """
     {
@@ -381,13 +523,11 @@ def test_clarification_result_repairs_unescaped_quotes_from_llm():
 
     result = runtime._parse_result("clarification_generate", response)
 
-    assert result["clarification_questions"][0]["ai_recommendation"] == (
-        'The requirement says "keep it simple", so use standard output.'
-    )
-    assert "Malformed Agent JSON was repaired" in result["logs"]
+    assert result["checkpoint"]["agent_response"] == response
+    assert result["clarification_questions"] == []
 
 
-def test_agent_result_rejects_chinese_text_even_when_json_is_valid():
+def test_agent_result_accepts_chinese_text_when_json_is_valid():
     runtime = AgentRuntime(get_settings())
     response = json.dumps(
         {
@@ -405,8 +545,8 @@ def test_agent_result_rejects_chinese_text_even_when_json_is_valid():
         ensure_ascii=False,
     )
 
-    with pytest.raises(RuntimeError, match="must use English only"):
-        runtime._parse_result("clarification_generate", response)
+    result = runtime._parse_result("clarification_generate", response)
+    assert result["checkpoint"]["agent_response"]["clarification_questions"][0]["ai_recommendation"] == "使用标准输出"
 
 
 def test_agent_english_validation_preserves_technical_identifiers():
@@ -448,7 +588,7 @@ def test_agent_english_validation_preserves_technical_identifiers():
     assert result["artifact_content"]["changed_files"][0]["path"] == "src/中文模块.py"
 
 
-async def test_non_english_agent_result_is_corrected_once_in_same_session(monkeypatch):
+async def test_non_english_agent_result_is_accepted_without_correction(monkeypatch):
     runtime = AgentRuntime(get_settings())
     chinese = json.dumps(
         {
@@ -520,10 +660,8 @@ async def test_non_english_agent_result_is_corrected_once_in_same_session(monkey
 
     await runtime._execute(44)
 
-    assert len(prompts) == 2
+    assert len(prompts) == 1
     assert prompts[0] == ("ses-requirement-main", None)
-    assert prompts[1][0] == "ses-requirement-main"
-    assert "English only" in str(prompts[1][1])
     assert reports[-1]["status"] == "succeeded"
 
 
@@ -559,7 +697,7 @@ def test_development_result_does_not_require_manual_test_cases():
     assert "test_cases" not in result
 
 
-def test_development_report_contract_reconciles_agent_aliases_without_tool_evidence():
+def test_development_report_fields_are_preserved_without_validation():
     runtime = AgentRuntime(get_settings())
     response = json.dumps(
         {
@@ -588,14 +726,12 @@ def test_development_report_contract_reconciles_agent_aliases_without_tool_evide
     )
     result = runtime._parse_result("development", response)
 
-    runtime._validate_result_contract("development", result)
-
-    assert result["artifact_content"]["checks"][0]["check_type"] == "unit_test"
-    assert result["artifact_content"]["checks"][1]["check_type"] == "smoke_test"
+    assert "check_type" not in result["artifact_content"]["checks"][0]
+    assert result["artifact_content"]["checks"][1]["type"] == "health_check"
     assert [item["exit_code"] for item in result["artifact_content"]["checks"]] == [0, 0]
 
 
-def test_development_report_contract_rejects_reported_failed_exit_code():
+def test_development_report_accepts_reported_failed_exit_code():
     runtime = AgentRuntime(get_settings())
     response = json.dumps(
         {
@@ -623,11 +759,10 @@ def test_development_report_contract_rejects_reported_failed_exit_code():
     )
     result = runtime._parse_result("development", response)
 
-    with pytest.raises(RuntimeError, match="smoke_test.exit_code must be 0"):
-        runtime._validate_result_contract("development", result)
+    assert result["artifact_content"]["checks"][1]["exit_code"] == 1
 
 
-def test_test_plan_result_requires_complete_manual_cases():
+def test_test_plan_result_accepts_incomplete_manual_cases():
     runtime = AgentRuntime(get_settings())
     invalid = json.dumps(
         {
@@ -638,8 +773,9 @@ def test_test_plan_result_requires_complete_manual_cases():
             },
         }
     )
-    with pytest.raises(RuntimeError, match="test_environment"):
-        runtime._parse_result("test_plan_generation", invalid)
+    invalid_result = runtime._parse_result("test_plan_generation", invalid)
+    assert invalid_result["artifact_content"]["test_scope"] == ["Order risk limit"]
+    assert "test_environment" not in invalid_result["artifact_content"]
 
     valid = json.dumps(
         {
@@ -669,7 +805,7 @@ def test_test_plan_result_requires_complete_manual_cases():
     assert result["artifact_content"]["manual_test_cases"][0]["automated"] is False
 
 
-async def test_test_plan_validation_correction_uses_same_session_once(monkeypatch):
+async def test_test_plan_result_does_not_trigger_correction(monkeypatch):
     runtime = AgentRuntime(get_settings())
     invalid = json.dumps(
         {
@@ -721,15 +857,12 @@ async def test_test_plan_validation_correction_uses_same_session_once(monkeypatc
 
     await runtime._execute(45)
 
-    assert len(prompts) == 2
+    assert len(prompts) == 1
     assert prompts[0] == ("ses-development-main", None)
-    assert prompts[1][0] == "ses-development-main"
-    assert "test_environment" in str(prompts[1][1])
-    assert reports[-1]["status"] == "failed"
-    assert reports[-1]["logs"] == []
+    assert reports[-1]["status"] == "succeeded"
 
 
-async def test_development_report_validation_correction_uses_same_session_once(monkeypatch):
+async def test_development_report_does_not_trigger_correction(monkeypatch):
     runtime = AgentRuntime(get_settings())
     invalid = json.dumps(
         {
@@ -810,12 +943,9 @@ async def test_development_report_validation_correction_uses_same_session_once(m
 
     await runtime._execute(46)
 
-    assert len(prompts) == 2
+    assert len(prompts) == 1
     assert prompts[0] == ("ses-development-main", None)
-    assert prompts[1][0] == "ses-development-main"
-    assert "unit_test" in str(prompts[1][1])
     assert reports[-1]["status"] == "succeeded"
-    assert reports[-1]["artifact_content"]["checks"][1]["check_type"] == "smoke_test"
 
 
 def test_task_modes_disable_child_agents_and_enforce_read_only_tools():
@@ -1332,7 +1462,7 @@ async def test_failed_result_and_retry_preserve_fixed_agent_checkpoint(client: A
             f"/api/v1/internal/agent-tasks/{task['id']}/result",
             json={
                 "status": "failed",
-                "error_message": "temporary dependency error",
+                "error_message": "tests_passed must be true token=private-value",
                 "checkpoint": {},
             },
             headers={"Authorization": "Bearer test-agent-token"},
@@ -1348,6 +1478,12 @@ async def test_failed_result_and_retry_preserve_fixed_agent_checkpoint(client: A
     assert retried["parent_task_id"] is None
     assert retried["session_id"] == task["session_id"]
     assert retried["checkpoint"]["retry_of_task_id"] == task["id"]
+    assert retried["checkpoint"]["retry_context"] == {
+        "previous_task_id": task["id"],
+        "previous_status": "failed",
+        "previous_error": "tests_passed must be true token=<redacted>",
+    }
+    assert "private-value" not in str(retried["checkpoint"])
     assert retried["checkpoint"]["agent_snapshot"]["version_id"] == task["agent_version_id"]
     assert "opencode_session_id" not in retried["checkpoint"]
 
@@ -1459,20 +1595,10 @@ async def test_openai_compatible_proxy_routes_clarification_and_settles_usage(
         await session.refresh(task)
         task_id = task.id
 
-    personal_route = payload(
-        await client.post(
-            "/api/v1/me/model-routes",
-            json={
-                "platform_route_id": route.id,
-                "name": "Clarification proxy personal route",
-                "level": "high",
-                "priority": 1,
-                "quota_limit": 10_000,
-            },
-            headers=users["pm"]["headers"],
-        )
-    )
     gateway = payload(await client.get("/api/v1/me/model-gateway", headers=users["pm"]["headers"]))
+    personal_route = next(
+        item for item in gateway["routes"] if item["id"] == route.id
+    )
     clarification_binding = next(
         item for item in gateway["bindings"] if item["agent_type"] == "requirement_clarification"
     )
@@ -1536,3 +1662,226 @@ async def test_openai_compatible_proxy_routes_clarification_and_settles_usage(
     assert proxy_log["status"] == "succeeded"
     assert proxy_log["input_tokens"] == 20
     assert proxy_log["output_tokens"] == 5
+
+
+async def test_reconcile_report_changed_files_fills_from_workspace_status(monkeypatch):
+    """When the Agent omits changed_files, the backend fills them from workspace status."""
+    runtime = AgentRuntime(get_settings())
+
+    class Manager:
+        def __init__(self, _settings):
+            pass
+
+        async def status(self, path):
+            assert path == "/workspaces/req-10/repo"
+            return {"head_commit": "abc123", "changed_files": ["config.py", "model_service.py"]}
+
+    monkeypatch.setattr("dagent.services.agent_runtime.WorkspaceManagerClient", Manager)
+
+    result = {
+        "output_summary": "Implementation complete",
+        "artifact_content": {
+            "tests_passed": True,
+            "changed_files": [],
+            "checks": [
+                {
+                    "check_type": "unit_test",
+                    "command": "pytest -q",
+                    "status": "passed",
+                    "summary": "OK",
+                    "exit_code": 0,
+                },
+                {
+                    "check_type": "smoke_test",
+                    "command": "python smoke.py",
+                    "status": "passed",
+                    "summary": "OK",
+                    "exit_code": 0,
+                },
+            ],
+        },
+    }
+    context = {"workspaces": [{"path": "/workspaces/req-10/repo"}]}
+
+    async def no_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "_log", no_log)
+
+    reconciled = await runtime._reconcile_report_changed_files(83, context, result)
+
+    assert len(reconciled["artifact_content"]["changed_files"]) == 2
+    assert reconciled["artifact_content"]["changed_files"][0]["path"] == "config.py"
+    assert reconciled["artifact_content"]["changed_files"][1]["path"] == "model_service.py"
+
+
+async def test_reconcile_report_changed_files_preserves_existing_entries(monkeypatch):
+    """When the Agent already provided changed_files, the backend does not override them."""
+    runtime = AgentRuntime(get_settings())
+
+    class Manager:
+        def __init__(self, _settings):
+            pass
+
+        async def status(self, _path):
+            return {"head_commit": "abc123", "changed_files": ["other.py"]}
+
+    monkeypatch.setattr("dagent.services.agent_runtime.WorkspaceManagerClient", Manager)
+
+    existing_files = [{"path": "src/service.py", "change": "Added validation"}]
+    result = {
+        "output_summary": "Implementation complete",
+        "artifact_content": {
+            "tests_passed": True,
+            "changed_files": existing_files,
+            "checks": [
+                {
+                    "check_type": "unit_test",
+                    "command": "pytest -q",
+                    "status": "passed",
+                    "summary": "OK",
+                    "exit_code": 0,
+                },
+                {
+                    "check_type": "smoke_test",
+                    "command": "python smoke.py",
+                    "status": "passed",
+                    "summary": "OK",
+                    "exit_code": 0,
+                },
+            ],
+        },
+    }
+    context = {"workspaces": [{"path": "/workspaces/req-10/repo"}]}
+
+    reconciled = await runtime._reconcile_report_changed_files(83, context, result)
+
+    assert reconciled["artifact_content"]["changed_files"] == existing_files
+
+
+async def test_development_report_preserves_empty_changed_files(monkeypatch):
+    """The execution path preserves the Agent report instead of filling fields."""
+    runtime = AgentRuntime(get_settings())
+
+    agent_response = json.dumps({
+        "output_summary": "Implementation complete",
+        "artifact_content": {
+            "tests_passed": True,
+            "changed_files": [],
+            "checks": [
+                {
+                    "check_type": "unit_test",
+                    "command": "pytest -q",
+                    "status": "passed",
+                    "summary": "OK",
+                    "exit_code": 0,
+                },
+                {
+                    "check_type": "smoke_test",
+                    "command": "python smoke.py",
+                    "status": "passed",
+                    "summary": "OK",
+                    "exit_code": 0,
+                },
+            ],
+        },
+    })
+
+    prompts: list[tuple[str, str | None]] = []
+    reports: list[dict] = []
+
+    async def prepare_context(_task_id):
+        return {
+            "task_id": 83,
+            "requirement_id": 10,
+            "title": "Fix model service",
+            "description": "Fix the model service validation",
+            "input_summary": "Implement the fix",
+            "task_type": "development",
+            "task_mode": "implementation",
+            "workspace_root": "/workspaces/req-10",
+            "workspaces": [
+                {
+                    "id": 9,
+                    "path": "/workspaces/req-10/repo",
+                    "repository_id": 1,
+                    "branch": "dagent/req-10",
+                    "base_branch": "main",
+                    "baseline_commit": "a" * 40,
+                    "head_commit": "b" * 40,
+                    "changed_files": [],
+                }
+            ],
+            "artifacts": {},
+            "review_feedback": [],
+            "checkpoint": {"agent_snapshot": {"role_type": "development"}},
+        }
+
+    async def ensure_session(_task_id, _context):
+        return "ses-dev-main"
+
+    async def send_prompt(session_id, _context, correction_error=None):
+        prompts.append((session_id, correction_error))
+        return agent_response, []
+
+    async def mock_commit_changes(_task_id, _context, result):
+        result["artifact_content"]["git_commits"] = [
+            {
+                "workspace_id": 9,
+                "head_commit": "c" * 40,
+                "changed_files": ["config.py", "model_service.py"],
+                "committed": True,
+            }
+        ]
+        result["logs"] = [*result.get("logs", []), "Committed 1 workspace(s)"]
+        return result
+
+    async def report_result(_task_id, result):
+        reports.append(result)
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "_prepare_context", prepare_context)
+    monkeypatch.setattr(runtime, "_ensure_session", ensure_session)
+    monkeypatch.setattr(runtime, "_send_prompt", send_prompt)
+    monkeypatch.setattr(runtime, "_commit_changes", mock_commit_changes)
+    monkeypatch.setattr(runtime, "_report_result", report_result)
+    monkeypatch.setattr(runtime, "_log", no_op)
+
+    class Manager:
+        def __init__(self, _settings):
+            pass
+
+        async def status(self, _path):
+            return {"head_commit": "b" * 40, "changed_files": ["config.py", "model_service.py"]}
+
+    monkeypatch.setattr("dagent.services.agent_runtime.WorkspaceManagerClient", Manager)
+
+    await runtime._execute(83)
+
+    assert len(prompts) == 1
+    assert prompts[0] == ("ses-dev-main", None)
+    assert reports[-1]["status"] == "succeeded"
+    changed = reports[-1]["artifact_content"]["changed_files"]
+    assert changed == []
+
+
+def test_development_prompt_does_not_require_report_fields():
+    runtime = AgentRuntime(get_settings())
+    context = {
+        "task_id": 83,
+        "requirement_id": 10,
+        "title": "Fix model service",
+        "description": "Fix the model service validation",
+        "input_summary": "Implement the fix",
+        "task_type": "development",
+        "task_mode": "implementation",
+        "workspace_root": "/workspaces/req-10",
+        "workspaces": [],
+        "artifacts": {},
+        "review_feedback": [],
+        "checkpoint": {"agent_snapshot": {"role_type": "development"}},
+    }
+    prompt = runtime._build_prompt(context)
+    assert "Do not assume any field is required" in prompt

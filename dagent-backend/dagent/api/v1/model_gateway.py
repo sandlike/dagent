@@ -33,6 +33,7 @@ from dagent.models import (
     User,
 )
 from dagent.services.audit import add_audit_log
+from dagent.services.credentials import encrypt_model_token
 from dagent.services.domain import get_project
 from dagent.services.model_gateway import (
     fallback_model_route,
@@ -98,8 +99,11 @@ async def create_model_route(
     trace_id: TraceId,
     user: User = admin_user,
 ) -> ApiResponse[ModelRouteRead]:
-    values = payload.model_dump()
+    values = payload.model_dump(exclude={"api_token"})
     values["base_url"] = str(payload.base_url).rstrip("/")
+    if payload.api_token is not None:
+        values["credential_ciphertext"] = encrypt_model_token(payload.api_token.get_secret_value())
+        values["credential_ref"] = None
     route = ModelRoute(tenant_id=user.tenant_id, **values)
     session.add(route)
     try:
@@ -141,17 +145,32 @@ async def update_model_route(
     route = await _route_or_404(session, user.tenant_id, route_id)
     if route.version != payload.resource_version:
         raise ConflictError("Model route resource version is stale")
-    changes = payload.model_dump(exclude_unset=True, exclude={"resource_version"})
+    changes = payload.model_dump(exclude_unset=True, exclude={"resource_version", "api_token"})
     if "base_url" in changes:
         changes["base_url"] = str(changes["base_url"]).rstrip("/")
+    if "api_token" in payload.model_fields_set:
+        changes["credential_ciphertext"] = (
+            encrypt_model_token(payload.api_token.get_secret_value()) if payload.api_token is not None else None
+        )
+        changes["credential_ref"] = None
+    elif "credential_ref" in changes:
+        changes["credential_ciphertext"] = None
     quota_limit = int(changes.get("quota_limit", route.quota_limit))
     if quota_limit < route.quota_used + route.quota_reserved:
         raise InvalidStateError("Quota limit cannot be lower than used and reserved tokens")
-    connectivity_fields = {"provider", "model", "base_url", "credential_ref"}
+    connectivity_fields = {
+        "provider",
+        "model",
+        "base_url",
+        "api_protocol",
+        "credential_ref",
+        "credential_ciphertext",
+    }
     for field, value in changes.items():
         setattr(route, field, value)
     if connectivity_fields.intersection(changes):
         route.health_status = "unknown"
+        route.detected_api_protocol = None
         route.status = "disabled"
     route.version += 1
     add_audit_log(
@@ -183,6 +202,8 @@ async def test_model_route(
     route = await _route_or_404(session, user.tenant_id, route_id)
     result = await probe_model_route(route)
     route.health_status = result.health_status
+    if result.detected_api_protocol is not None:
+        route.detected_api_protocol = result.detected_api_protocol
     route.last_checked_at = datetime.now().astimezone()
     add_audit_log(
         session,

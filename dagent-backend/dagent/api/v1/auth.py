@@ -1,23 +1,26 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from dagent.api.deps import CurrentUser, SessionDep, oauth2_scheme
 from dagent.api.errors import DagentError
 from dagent.api.schemas.common import ApiResponse
 from dagent.api.schemas.domain import LoginRequest, LoginResponse, UserRead
+from dagent.config import get_settings
 from dagent.models import RevokedToken, User
 from dagent.security import create_access_token, decode_access_token, verify_password
 
 router = APIRouter()
+QUICK_LOGIN_USERS = frozenset({"admin", "pm", "developer", "qa"})
 
 
-@router.post("/login", response_model=ApiResponse[LoginResponse])
-async def login(payload: LoginRequest, session: SessionDep) -> ApiResponse[LoginResponse]:
-    user = await session.scalar(select(User).where(User.username == payload.username, User.status == "active"))
-    if user is None or not verify_password(payload.password, user.password_hash):
-        raise DagentError(401, 40101, "Invalid username or password")
+class QuickLoginRequest(BaseModel):
+    username: str
+
+
+def _login_response(user: User) -> ApiResponse[LoginResponse]:
     token, expires_at, _ = create_access_token(user.id, user.tenant_id, user.roles)
     return ApiResponse(
         data=LoginResponse(
@@ -26,6 +29,24 @@ async def login(payload: LoginRequest, session: SessionDep) -> ApiResponse[Login
             user=UserRead.model_validate(user),
         )
     )
+
+
+@router.post("/login", response_model=ApiResponse[LoginResponse])
+async def login(payload: LoginRequest, session: SessionDep) -> ApiResponse[LoginResponse]:
+    user = await session.scalar(select(User).where(User.username == payload.username, User.status == "active"))
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise DagentError(401, 40101, "Invalid username or password")
+    return _login_response(user)
+
+
+@router.post("/quick-login", response_model=ApiResponse[LoginResponse])
+async def quick_login(payload: QuickLoginRequest, session: SessionDep) -> ApiResponse[LoginResponse]:
+    if not get_settings().QUICK_LOGIN_ENABLED or payload.username not in QUICK_LOGIN_USERS:
+        raise DagentError(403, 40301, "Quick login is unavailable")
+    user = await session.scalar(select(User).where(User.username == payload.username, User.status == "active"))
+    if user is None:
+        raise DagentError(404, 40401, "User not found")
+    return _login_response(user)
 
 
 @router.get("/me", response_model=ApiResponse[UserRead])

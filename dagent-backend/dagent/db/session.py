@@ -96,6 +96,20 @@ def _upgrade_existing_schema(connection) -> None:
             )
         )
 
+    if "model_routes" in tables:
+        model_route_columns = {column["name"] for column in inspector.get_columns("model_routes")}
+        if "api_protocol" not in model_route_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE model_routes ADD COLUMN api_protocol VARCHAR(30) "
+                    "NOT NULL DEFAULT 'auto'"
+                )
+            )
+        if "detected_api_protocol" not in model_route_columns:
+            connection.execute(text("ALTER TABLE model_routes ADD COLUMN detected_api_protocol VARCHAR(30) NULL"))
+        if "credential_ciphertext" not in model_route_columns:
+            connection.execute(text("ALTER TABLE model_routes ADD COLUMN credential_ciphertext TEXT NULL"))
+
     if "model_call_logs" in tables:
         log_columns = {column["name"] for column in inspector.get_columns("model_call_logs")}
         if "user_id" not in log_columns:

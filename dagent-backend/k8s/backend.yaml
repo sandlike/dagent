@@ -29,6 +29,8 @@ spec:
             - -c
             - >-
               python -c "import shutil; shutil.unpack_archive('/bundle/dagent.tar.gz', '/app')"
+              && cp /quick-login-patch/auth.py /app/dagent/api/v1/auth.py
+              && cp /quick-login-patch/config.py /app/dagent/config.py
               && python -m pip install --no-cache-dir
               --index-url https://mirrors.aliyun.com/pypi/simple/
               --target /runtime /app
@@ -36,6 +38,9 @@ spec:
           volumeMounts:
             - name: source-bundle
               mountPath: /bundle
+              readOnly: true
+            - name: quick-login-patch
+              mountPath: /quick-login-patch
               readOnly: true
             - name: app-source
               mountPath: /app
@@ -146,7 +151,10 @@ spec:
           emptyDir: {}
         - name: source-bundle
           configMap:
-            name: dagent-source-bundle-v33
+            name: dagent-source-bundle-v50
+        - name: quick-login-patch
+          configMap:
+            name: dagent-backend-quick-login-v51
         - name: app-source
           emptyDir: {}
         - name: python-runtime

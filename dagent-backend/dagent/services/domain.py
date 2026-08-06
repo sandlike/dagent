@@ -123,8 +123,10 @@ async def add_artifact_version(
     source: str,
     created_by: int | None,
     source_ref: str | None = None,
+    normalize: bool = True,
 ) -> ArtifactVersion:
-    content = normalize_artifact_content(artifact_type, content)
+    if normalize:
+        content = normalize_artifact_content(artifact_type, content)
     artifact = await session.scalar(
         select(Artifact)
         .where(Artifact.requirement_id == requirement.id, Artifact.artifact_type == artifact_type)

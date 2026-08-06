@@ -77,6 +77,11 @@ GATE_CONFIG: dict[str, dict[str, Any]] = {
         "artifact": "development_report",
         "roles": {"developer"},
     },
+    "test_plan": {
+        "stage": PipelineState.TEST_PLAN_REVIEW,
+        "artifact": "test_plan",
+        "roles": {"pm", "qa"},
+    },
     "final_acceptance": {
         "stage": PipelineState.FINAL_ACCEPTANCE,
         "artifact": "test_plan",
@@ -314,8 +319,17 @@ async def update_requirement(
     user: User = Depends(require_roles("pm")),
 ) -> ApiResponse[RequirementRead]:
     requirement = await get_requirement(session, user, requirement_id)
-    if requirement.stage != PipelineState.REQUIREMENT_DRAFT.value:
-        raise InvalidStateError("Only draft requirements can be edited directly")
+    if requirement.stage == PipelineState.REQUIREMENT_CLARIFICATION.value:
+        latest_round = await session.scalar(
+            select(ClarificationRound)
+            .where(ClarificationRound.requirement_id == requirement.id)
+            .order_by(ClarificationRound.round_no.desc())
+            .limit(1)
+        )
+        if latest_round is None or latest_round.status != "confirmed":
+            raise InvalidStateError("Requirement details can only be edited after a confirmed clarification round")
+    elif requirement.stage != PipelineState.REQUIREMENT_DRAFT.value:
+        raise InvalidStateError("Only draft requirements or rejected clarifications can be edited")
     _require_version(requirement, payload.resource_version)
     if payload.repository_ids is not None:
         repository_ids = set(payload.repository_ids)
@@ -552,7 +566,7 @@ def _actions_for(requirement: Requirement, user: User) -> list[str]:
     if stage == PipelineState.REQUIREMENT_DRAFT and roles.intersection({"admin", "pm"}):
         actions.extend(["edit", "submit", "cancel"])
     elif stage == PipelineState.REQUIREMENT_CLARIFICATION and roles.intersection({"admin", "pm"}):
-        actions.extend(["generate_clarification", "answer_clarification", "confirm_clarification"])
+        actions.extend(["edit", "generate_clarification", "answer_clarification", "confirm_clarification", "reopen_clarification"])
     elif stage in AUTOMATED_STATES and roles.intersection({"admin", "developer", "pm", "qa"}):
         actions.append("start_task")
     for gate, config in GATE_CONFIG.items():
@@ -848,6 +862,47 @@ async def confirm_clarification(
     await session.commit()
     await session.refresh(requirement)
     return ApiResponse(data=await _requirement_read(session, requirement))
+
+
+@router.post("/{requirement_id}/clarification/reopen", response_model=ApiResponse[dict])
+async def reopen_clarification(
+    requirement_id: int,
+    payload: ResourceVersionRequest,
+    session: SessionDep,
+    trace_id: TraceId,
+    user: User = Depends(require_roles("pm")),
+) -> ApiResponse[dict]:
+    """Reset the latest confirmed clarification round for selective re-answering."""
+    requirement = await get_requirement(session, user, requirement_id)
+    _require_version(requirement, payload.resource_version)
+    if requirement.stage != PipelineState.REQUIREMENT_CLARIFICATION.value:
+        raise InvalidStateError("Clarification can only be reopened during requirement clarification")
+    latest_round = await session.scalar(
+        select(ClarificationRound)
+        .where(ClarificationRound.requirement_id == requirement.id)
+        .order_by(ClarificationRound.round_no.desc())
+        .limit(1)
+    )
+    if latest_round is None or latest_round.status != "confirmed":
+        raise InvalidStateError("Only a confirmed clarification round can be reopened")
+    question_ids = list(
+        await session.scalars(select(ClarificationQuestion.id).where(ClarificationQuestion.round_id == latest_round.id))
+    )
+    if question_ids:
+        await session.execute(delete(ClarificationAnswer).where(ClarificationAnswer.question_id.in_(question_ids)))
+    latest_round.status = "pending_answers"
+    requirement.version += 1
+    add_audit_log(
+        session,
+        tenant_id=user.tenant_id,
+        actor_id=user.id,
+        action="clarification.reopen",
+        resource_type="clarification_round",
+        resource_id=latest_round.id,
+        trace_id=trace_id,
+    )
+    await session.commit()
+    return ApiResponse(data={"round_id": latest_round.id, "status": latest_round.status, "resource_version": requirement.version})
 
 
 @router.get("/{requirement_id}/artifacts", response_model=ApiResponse[list[dict]])

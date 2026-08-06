@@ -3,9 +3,11 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from dagent.api.schemas.model_gateway import ModelRouteTestResult
-from dagent.api.v1.model_proxy import _fallback_error
+from dagent.api.v1.model_proxy import _fallback_error, _responses_request, _responses_to_chat
 from dagent.db.session import async_session
-from dagent.models import AgentTask, ModelQuotaLedger, Requirement, UserModelQuota
+from dagent.models import AgentTask, ModelQuotaLedger, ModelRoute, Requirement, UserModelQuota
+from dagent.services.credentials import decrypt_model_token
+from dagent.services.model_gateway import probe_model_route
 
 
 def payload(response):
@@ -24,6 +26,308 @@ def test_only_provider_failures_are_eligible_for_automatic_fallback():
     assert _fallback_error(422) is None
 
 
+async def test_admin_can_add_a_new_model_with_an_encrypted_api_token(client: AsyncClient, users):
+    raw_token = "test-model-token-not-for-storage"
+    created = payload(
+        await client.post(
+            "/api/v1/model-routes",
+            json={
+                "name": "admin-created-model",
+                "provider": "openai-compatible",
+                "model": "new-model",
+                "base_url": "http://localhost:8000/v1",
+                "priority": 20,
+                "quota_limit": 50000,
+                "api_token": raw_token,
+            },
+            headers=users["admin"]["headers"],
+        )
+    )
+    assert created["credential_configured"] is True
+    assert "api_token" not in created
+    assert "credential_ciphertext" not in created
+
+    async with async_session() as session:
+        route = await session.get(ModelRoute, created["id"])
+        assert route is not None
+        assert route.credential_ref is None
+        assert route.credential_ciphertext
+        assert route.credential_ciphertext != raw_token
+        assert decrypt_model_token(route.credential_ciphertext) == raw_token
+
+    denied = await client.post(
+        "/api/v1/model-routes",
+        json={
+            "name": "developer-created-model",
+            "provider": "openai-compatible",
+            "model": "new-model",
+            "base_url": "http://localhost:8000/v1",
+            "priority": 21,
+            "quota_limit": 50000,
+            "api_token": raw_token,
+        },
+        headers=users["developer"]["headers"],
+    )
+    assert denied.status_code == 403
+
+
+async def test_model_route_probe_accepts_a_configured_public_host(monkeypatch):
+    requested_urls: list[str] = []
+    completion_payloads: list[dict] = []
+
+    class ModelsResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"id": "test-model"}]}
+
+    class CompletionResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, headers):
+            requested_urls.append(url)
+            return ModelsResponse()
+
+        async def post(self, url, headers, json):
+            requested_urls.append(url)
+            completion_payloads.append(json)
+            return CompletionResponse()
+
+    monkeypatch.setattr("dagent.services.model_gateway.httpx.AsyncClient", FakeClient)
+    result = await probe_model_route(
+        ModelRoute(
+            base_url="https://shayulajiao.xyz/v1",
+            model="test-model",
+            timeout_ms=1_000,
+            credential_ref=None,
+            credential_ciphertext=None,
+        )
+    )
+
+    assert result.ok is True
+    assert result.response_preview == "OK"
+    assert requested_urls == [
+        "https://shayulajiao.xyz/v1/models",
+        "https://shayulajiao.xyz/v1/chat/completions",
+    ]
+    assert completion_payloads == [
+        {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+            "max_tokens": 256,
+            "stream": False,
+        }
+    ]
+
+
+async def test_model_route_probe_rejects_an_empty_success_response(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.body
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse({"data": [{"id": "test-model"}]})
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse({"choices": []})
+
+    monkeypatch.setattr("dagent.services.model_gateway.httpx.AsyncClient", FakeClient)
+    result = await probe_model_route(
+        ModelRoute(
+            base_url="https://example.com/v1",
+            model="test-model",
+            timeout_ms=1_000,
+            credential_ref=None,
+            credential_ciphertext=None,
+        )
+    )
+
+    assert result.ok is False
+    assert result.health_status == "unhealthy"
+    assert result.response_preview is None
+    assert result.message.startswith("No supported model API protocol detected")
+
+
+async def test_model_route_probe_auto_detects_responses_api(monkeypatch):
+    requested_urls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def __init__(self, body, error=False):
+            self.body = body
+            self.error = error
+
+        def raise_for_status(self):
+            if self.error:
+                raise httpx.HTTPError("unsupported")
+
+        def json(self):
+            return self.body
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse({})
+
+        async def post(self, url, **_kwargs):
+            requested_urls.append(url)
+            if url.endswith("/chat/completions"):
+                return FakeResponse({}, error=True)
+            return FakeResponse(
+                {
+                    "id": "resp_test",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "OK"}],
+                        }
+                    ],
+                }
+            )
+
+    monkeypatch.setattr("dagent.services.model_gateway.httpx.AsyncClient", FakeClient)
+    result = await probe_model_route(
+        ModelRoute(
+            base_url="https://example.com/v1",
+            model="test-model",
+            timeout_ms=1_000,
+            credential_ref=None,
+            credential_ciphertext=None,
+        )
+    )
+
+    assert result.ok is True
+    assert result.detected_api_protocol == "responses"
+    assert result.response_preview == "OK"
+    assert requested_urls == [
+        "https://example.com/v1/chat/completions",
+        "https://example.com/v1/responses",
+    ]
+
+
+def test_responses_request_and_result_are_translated_to_chat_contract():
+    request = _responses_request(
+        {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 256,
+        },
+        "test-model",
+    )
+    assert request == {
+        "model": "test-model",
+        "input": [{"role": "user", "content": "hello"}],
+        "stream": False,
+        "max_output_tokens": 256,
+    }
+    response = _responses_to_chat(
+        {
+            "id": "resp_test",
+            "model": "test-model",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "hello"}],
+                }
+            ],
+            "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        },
+        "test-model",
+    )
+    assert response["choices"][0]["message"]["content"] == "hello"
+    assert response["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
+
+async def test_model_route_probe_still_tests_chat_when_models_metadata_is_not_json(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("not json")
+
+    class CompletionResponse(FakeResponse):
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+        async def post(self, *_args, **_kwargs):
+            return CompletionResponse()
+
+    monkeypatch.setattr("dagent.services.model_gateway.httpx.AsyncClient", FakeClient)
+    result = await probe_model_route(
+        ModelRoute(
+            base_url="https://example.com/v1",
+            model="test-model",
+            timeout_ms=1_000,
+            credential_ref=None,
+            credential_ciphertext=None,
+        )
+    )
+
+    assert result.ok is True
+    assert result.sample_models == []
+    assert result.response_preview == "OK"
+
+
 async def test_model_gateway_reserves_falls_back_settles_and_audits(
     client: AsyncClient, users, monkeypatch
 ):
@@ -39,7 +343,11 @@ async def test_model_gateway_reserves_falls_back_settles_and_audits(
     monkeypatch.setattr("dagent.api.v1.model_gateway.probe_model_route", healthy_probe)
     admin_headers = users["admin"]["headers"]
 
-    async def create_active_route(name: str, priority: int):
+    async def create_active_route(
+        name: str,
+        priority: int,
+        agent_types: list[str] | None = None,
+    ):
         route = payload(
             await client.post(
                 "/api/v1/model-routes",
@@ -51,7 +359,7 @@ async def test_model_gateway_reserves_falls_back_settles_and_audits(
                     "priority": priority,
                     "quota_limit": 1000,
                     "fallback_on": ["timeout", "quota_exhausted"],
-                    "agent_types": ["development"],
+                    "agent_types": agent_types if agent_types is not None else [],
                     "environments": ["test"],
                 },
                 headers=admin_headers,
@@ -65,8 +373,13 @@ async def test_model_gateway_reserves_falls_back_settles_and_audits(
             await client.post(f"/api/v1/model-routes/{route['id']}/enable", headers=admin_headers)
         )
 
-    primary = await create_active_route("gateway-test-primary", 1)
-    secondary = await create_active_route("gateway-test-secondary", 2)
+    clarification_only = await create_active_route(
+        "gateway-test-clarification-only",
+        1,
+        ["requirement_clarification"],
+    )
+    primary = await create_active_route("gateway-test-primary", 2)
+    secondary = await create_active_route("gateway-test-secondary", 3)
 
     denied = await client.get("/api/v1/model-routes", headers=users["developer"]["headers"])
     assert denied.status_code == 403
@@ -118,6 +431,13 @@ async def test_model_gateway_reserves_falls_back_settles_and_audits(
         )
     )
     assert reservation["route"]["id"] == primary["id"]
+    assert reservation["route"]["id"] != clarification_only["id"]
+    payload(
+        await client.post(
+            f"/api/v1/model-routes/{clarification_only['id']}/disable",
+            headers=admin_headers,
+        )
+    )
 
     fallback = payload(
         await client.post(
@@ -275,19 +595,7 @@ async def test_model_gateway_reserves_falls_back_settles_and_audits(
     assert visible_binding["route_name"] == "gateway-test-secondary"
 
 
-async def test_user_model_pools_bindings_quota_and_fallback_are_isolated(
-    client: AsyncClient, users, monkeypatch
-):
-    async def healthy_user_probe(_route):
-        return ModelRouteTestResult(
-            ok=True,
-            latency_ms=9,
-            health_status="healthy",
-            sample_models=["test-model"],
-            message="ok",
-        )
-
-    monkeypatch.setattr("dagent.api.v1.user_model_gateway.probe_model_route", healthy_user_probe)
+async def test_platform_model_bindings_share_route_quota_and_user_budgets(client: AsyncClient, users):
     developer_headers = users["developer"]["headers"]
     pm_headers = users["pm"]["headers"]
 
@@ -295,9 +603,9 @@ async def test_user_model_pools_bindings_quota_and_fallback_are_isolated(
     pm_gateway_before = payload(await client.get("/api/v1/me/model-gateway", headers=pm_headers))
     assert len(developer_gateway["routes"]) >= 2
     assert len(pm_gateway_before["routes"]) >= 2
-    assert {item["id"] for item in developer_gateway["routes"]}.isdisjoint(
-        {item["id"] for item in pm_gateway_before["routes"]}
-    )
+    assert {item["id"] for item in developer_gateway["routes"]} == {
+        item["id"] for item in pm_gateway_before["routes"]
+    }
     assert {item["agent_type"] for item in developer_gateway["bindings"]} == {
         "requirement_clarification",
         "development",
@@ -305,16 +613,23 @@ async def test_user_model_pools_bindings_quota_and_fallback_are_isolated(
     assert "base_url" not in developer_gateway["routes"][0]
     assert "credential_ref" not in developer_gateway["routes"][0]
     assert isinstance(developer_gateway["routes"][0]["credential_configured"], bool)
-    verification = payload(
-        await client.post(
-            f"/api/v1/me/model-routes/{developer_gateway['routes'][0]['id']}/test",
-            headers=developer_headers,
-        )
+    removed_user_route_api = await client.post(
+        f"/api/v1/me/model-routes/{developer_gateway['routes'][0]['id']}/test",
+        headers=developer_headers,
     )
-    assert verification["ok"] is True
+    assert removed_user_route_api.status_code == 404
 
     route_ids = [item["id"] for item in developer_gateway["routes"][:2]]
     bindings_by_type = {item["agent_type"]: item for item in developer_gateway["bindings"]}
+    duplicate_priority = await client.put(
+        "/api/v1/me/agent-model-bindings/development",
+        json={
+            "route_ids": [route_ids[0], route_ids[0]],
+            "resource_version": bindings_by_type["development"]["resource_version"],
+        },
+        headers=developer_headers,
+    )
+    assert duplicate_priority.status_code == 422
     for agent_type in ("requirement_clarification", "development"):
         updated = payload(
             await client.put(
@@ -340,13 +655,14 @@ async def test_user_model_pools_bindings_quota_and_fallback_are_isolated(
         )
     )
     primary = next(item for item in refreshed["routes"] if item["id"] == route_ids[0])
-    payload(
-        await client.patch(
-            f"/api/v1/me/model-routes/{primary['id']}",
-            json={"quota_limit": 100, "resource_version": primary["resource_version"]},
-            headers=developer_headers,
-        )
-    )
+    initial_shared_quota = next(item for item in refreshed["routes"] if item["id"] == route_ids[1])[
+        "quota_used"
+    ]
+    async with async_session() as session:
+        platform_route = await session.get(ModelRoute, primary["id"])
+        assert platform_route is not None
+        platform_route.quota_limit = 100
+        await session.commit()
 
     async with async_session() as session:
         user_quota = await session.scalar(
@@ -396,7 +712,8 @@ async def test_user_model_pools_bindings_quota_and_fallback_are_isolated(
         )
         assert ledger is not None
         assert ledger.user_id == users["developer"]["id"]
-        assert ledger.user_route_id == route_ids[1]
+        assert ledger.route_id == route_ids[1]
+        assert ledger.user_route_id is None
     payload(
         await client.post(
             "/api/v1/internal/model-reservations/user-model-isolation-request/settle",
@@ -418,19 +735,21 @@ async def test_user_model_pools_bindings_quota_and_fallback_are_isolated(
     assert developer_after["quota"]["quota_remaining"] is None
     assert pm_after["quota"]["quota_used"] == pm_gateway_before["quota"]["quota_used"]
     backup = next(item for item in developer_after["routes"] if item["id"] == route_ids[1])
-    assert backup["quota_used"] == 150
+    assert backup["quota_used"] == initial_shared_quota + 150
+    pm_backup = next(item for item in pm_after["routes"] if item["id"] == route_ids[1])
+    assert pm_backup["quota_used"] == backup["quota_used"]
 
     logs = payload(await client.get("/api/v1/me/model-call-logs", headers=developer_headers))
     matching_log = next(item for item in logs["items"] if item["task_id"] == task_id)
     assert matching_log["user_id"] == users["developer"]["id"]
     assert matching_log["agent_type"] == "development"
-    assert matching_log["user_route_id"] == route_ids[1]
+    assert matching_log["route_id"] == route_ids[1]
     assert matching_log["model"] == "test-model"
     assert matching_log["estimated_input_tokens"] == 120
     assert matching_log["output_token_budget"] == 80
     assert matching_log["reserved_tokens"] == 200
     assert matching_log["released_tokens"] == 50
-    assert matching_log["fallback_from_user_route_id"] == route_ids[0]
+    assert matching_log["fallback_from_route_id"] == route_ids[0]
     assert matching_log["fallback_reason"] == "quota_exhausted"
 
     settings = payload(

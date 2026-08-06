@@ -22,12 +22,14 @@ export type StageCode =
   | 'development'
   | 'development_report_review'
   | 'test_plan_generation'
+  | 'test_plan_review'
   | 'final_acceptance'
   | 'completed'
 
 export type ReviewGate =
   | 'development_document'
   | 'development_report'
+  | 'test_plan'
   | 'final_acceptance'
 
 export interface User {
@@ -302,6 +304,8 @@ export interface AuditLog {
 
 export type ModelRouteStatus = 'active' | 'disabled'
 export type ModelHealthStatus = 'unknown' | 'healthy' | 'unhealthy'
+export type ModelApiProtocol = 'auto' | 'chat_completions' | 'responses'
+export type DetectedModelApiProtocol = 'chat_completions' | 'responses'
 export type ModelFallbackError = 'quota_exhausted' | 'rate_limited' | 'timeout' | 'server_error' | 'authentication_error'
 
 export interface ModelRoute {
@@ -310,6 +314,8 @@ export interface ModelRoute {
   provider: string
   model: string
   base_url: string
+  api_protocol: ModelApiProtocol
+  detected_api_protocol: DetectedModelApiProtocol | null
   priority: number
   quota_limit: number
   quota_reserved: number
@@ -330,6 +336,7 @@ export interface ModelRoute {
   health_status: ModelHealthStatus
   last_checked_at: string | null
   last_called_at: string | null
+  call_count?: number
   version: number
   created_at: string
   updated_at: string
@@ -371,7 +378,6 @@ export interface ModelCallLog {
   released_tokens: number
   usage_estimated: boolean
   fallback_from_route_id: number | null
-  fallback_from_user_route_id: number | null
   fallback_reason: string | null
   created_at: string
 }
@@ -384,7 +390,6 @@ export interface ProjectModelRoute {
 }
 
 export type AgentModelType = 'requirement_clarification' | 'development'
-export type UserModelLevel = 'high' | 'standard' | 'economy'
 
 export interface UserModelQuota {
   quota_limit: number
@@ -397,14 +402,16 @@ export interface UserModelQuota {
   resource_version: number
 }
 
-export interface UserModelRoute {
+export interface AgentModelRoute {
   id: number
-  platform_route_id: number
   name: string
-  level: UserModelLevel
   provider: string
   model: string
+  base_url?: string
+  api_protocol: ModelApiProtocol
+  detected_api_protocol: DetectedModelApiProtocol | null
   priority: number
+  agent_types: string[]
   quota_limit: number
   quota_reserved: number
   quota_used: number
@@ -427,24 +434,15 @@ export interface UserAgentModelBinding {
 
 export interface UserModelGateway {
   quota: UserModelQuota
-  routes: UserModelRoute[]
+  routes: AgentModelRoute[]
   bindings: UserAgentModelBinding[]
-}
-
-export interface ModelCatalogItem {
-  id: number
-  name: string
-  provider: string
-  model: string
-  health_status: ModelHealthStatus
-  credential_configured: boolean
 }
 
 export interface UserModelCallLog {
   id: number
   user_id: number
   agent_type: string
-  user_route_id: number
+  route_id: number
   route_name: string
   model: string
   task_id: number | null
@@ -465,7 +463,6 @@ export interface UserModelCallLog {
   released_tokens: number
   usage_estimated: boolean
   fallback_from_route_id: number | null
-  fallback_from_user_route_id: number | null
   fallback_reason: string | null
   created_at: string
 }

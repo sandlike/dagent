@@ -9,7 +9,7 @@ from dagent.api.schemas.common import ORMModel
 
 RoleCode = Literal["admin", "pm", "developer", "qa"]
 PriorityCode = Literal["P0", "P1", "P2", "P3"]
-ReviewGate = Literal["development_document", "development_report", "final_acceptance"]
+ReviewGate = Literal["development_document", "development_report", "test_plan", "final_acceptance"]
 
 
 class LoginRequest(BaseModel):
@@ -203,8 +203,8 @@ class TaskCreateRequest(BaseModel):
 
 
 class ClarificationQuestionResult(BaseModel):
-    question: str = Field(min_length=1)
-    question_type: Literal["single", "multiple", "text", "file"]
+    question: str = ""
+    question_type: str = "text"
     required: bool = True
     options: list[dict[str, Any]] = Field(default_factory=list)
     ai_recommendation: str = ""
@@ -218,7 +218,7 @@ class TaskResultRequest(BaseModel):
     artifact_type: str | None = Field(default=None, max_length=60)
     artifact_content: Any = None
     test_cases: Any = None
-    clarification_questions: list[ClarificationQuestionResult] = Field(default_factory=list)
+    clarification_questions: Any = None
     logs: list[str] = Field(default_factory=list, max_length=1000)
 
 

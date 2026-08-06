@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import AnyHttpUrl, BaseModel, Field, computed_field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, computed_field, field_validator
 
 from dagent.api.schemas.common import ORMModel
 
@@ -18,6 +18,8 @@ RouteStatus = Literal["active", "disabled"]
 HealthStatus = Literal["unknown", "healthy", "unhealthy"]
 AgentModelType = Literal["requirement_clarification", "development"]
 ModelLevel = Literal["high", "standard", "economy"]
+ApiProtocol = Literal["auto", "chat_completions", "responses"]
+DetectedApiProtocol = Literal["chat_completions", "responses"]
 
 
 def default_fallback_errors() -> list[FallbackError]:
@@ -29,6 +31,7 @@ class ModelRouteCreate(BaseModel):
     provider: str = Field(min_length=1, max_length=50)
     model: str = Field(min_length=1, max_length=160)
     base_url: AnyHttpUrl
+    api_protocol: ApiProtocol = "auto"
     priority: int = Field(ge=1, le=1000)
     quota_limit: int = Field(default=50_000, ge=1)
     reset_policy: Literal["manual"] = "manual"
@@ -39,6 +42,7 @@ class ModelRouteCreate(BaseModel):
     project_ids: list[int] = Field(default_factory=list)
     environments: list[str] = Field(default_factory=lambda: ["test", "production"])
     credential_ref: str | None = Field(default=None, max_length=255)
+    api_token: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
     gateway_provider_ref: str | None = Field(default=None, max_length=160)
     gateway_route_ref: str | None = Field(default=None, max_length=160)
 
@@ -68,6 +72,7 @@ class ModelRouteUpdate(BaseModel):
     provider: str | None = Field(default=None, min_length=1, max_length=50)
     model: str | None = Field(default=None, min_length=1, max_length=160)
     base_url: AnyHttpUrl | None = None
+    api_protocol: ApiProtocol | None = None
     priority: int | None = Field(default=None, ge=1, le=1000)
     quota_limit: int | None = Field(default=None, ge=1)
     timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
@@ -77,6 +82,7 @@ class ModelRouteUpdate(BaseModel):
     project_ids: list[int] | None = None
     environments: list[str] | None = None
     credential_ref: str | None = Field(default=None, max_length=255)
+    api_token: SecretStr | None = Field(default=None, min_length=1, max_length=1000)
     gateway_provider_ref: str | None = Field(default=None, max_length=160)
     gateway_route_ref: str | None = Field(default=None, max_length=160)
     resource_version: int = Field(ge=1)
@@ -114,6 +120,8 @@ class ModelRouteRead(ORMModel):
     provider: str
     model: str
     base_url: str
+    api_protocol: ApiProtocol
+    detected_api_protocol: DetectedApiProtocol | None
     priority: int
     quota_limit: int
     quota_reserved: int
@@ -126,6 +134,7 @@ class ModelRouteRead(ORMModel):
     project_ids: list[int]
     environments: list[str]
     credential_ref: str | None
+    credential_ciphertext: str | None = Field(default=None, exclude=True, repr=False)
     gateway_provider_ref: str | None
     gateway_route_ref: str | None
     status: RouteStatus
@@ -144,7 +153,7 @@ class ModelRouteRead(ORMModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def credential_configured(self) -> bool:
-        return bool(self.credential_ref)
+        return bool(self.credential_ref or getattr(self, "credential_ciphertext", None))
 
 
 class ModelRouteTestResult(BaseModel):
@@ -152,6 +161,8 @@ class ModelRouteTestResult(BaseModel):
     latency_ms: int
     health_status: HealthStatus
     sample_models: list[str] = Field(default_factory=list)
+    response_preview: str | None = None
+    detected_api_protocol: DetectedApiProtocol | None = None
     message: str
 
 
@@ -191,7 +202,6 @@ class ModelCallLogRead(ORMModel):
     released_tokens: int
     usage_estimated: bool
     fallback_from_route_id: int | None
-    fallback_from_user_route_id: int | None
     fallback_reason: str | None
     created_at: datetime
 
@@ -207,40 +217,15 @@ class UserModelQuotaRead(BaseModel):
     resource_version: int
 
 
-class ModelCatalogItem(BaseModel):
+class AgentModelRouteRead(BaseModel):
     id: int
     name: str
     provider: str
     model: str
-    health_status: HealthStatus
-    credential_configured: bool
-
-
-class UserModelRouteCreate(BaseModel):
-    platform_route_id: int = Field(gt=0)
-    name: str = Field(min_length=1, max_length=120)
-    level: ModelLevel = "standard"
-    priority: int = Field(ge=1, le=1000)
-    quota_limit: int = Field(default=50_000, ge=1)
-
-
-class UserModelRouteUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    level: ModelLevel | None = None
-    priority: int | None = Field(default=None, ge=1, le=1000)
-    quota_limit: int | None = Field(default=None, ge=1)
-    status: RouteStatus | None = None
-    resource_version: int = Field(ge=1)
-
-
-class UserModelRouteRead(BaseModel):
-    id: int
-    platform_route_id: int
-    name: str
-    level: ModelLevel
-    provider: str
-    model: str
+    api_protocol: ApiProtocol
+    detected_api_protocol: DetectedApiProtocol | None
     priority: int
+    agent_types: list[str]
     quota_limit: int
     quota_reserved: int
     quota_used: int
@@ -256,7 +241,10 @@ class UserModelRouteRead(BaseModel):
 
 
 class UserAgentModelBindingUpdate(BaseModel):
-    route_ids: list[int] = Field(min_length=1)
+    route_ids: list[int] = Field(
+        min_length=1,
+        description="Ordered model route IDs; list position is the per-Agent priority starting at 1",
+    )
     resource_version: int = Field(ge=1)
 
     @field_validator("route_ids")
@@ -264,12 +252,16 @@ class UserAgentModelBindingUpdate(BaseModel):
     def unique_route_ids(cls, values: list[int]) -> list[int]:
         if any(value <= 0 for value in values):
             raise ValueError("Route IDs must be positive")
-        return list(dict.fromkeys(values))
+        if len(values) != len(set(values)):
+            raise ValueError("An Agent model priority list cannot contain duplicate routes")
+        return values
 
 
 class UserAgentModelBindingRead(BaseModel):
     agent_type: AgentModelType
-    route_ids: list[int]
+    route_ids: list[int] = Field(
+        description="Ordered model route IDs; list position is the per-Agent priority starting at 1"
+    )
     resource_version: int
 
 
@@ -287,7 +279,7 @@ class UserModelQuotaAdminUpdate(BaseModel):
 
 class UserModelGatewayRead(BaseModel):
     quota: UserModelQuotaRead
-    routes: list[UserModelRouteRead]
+    routes: list[AgentModelRouteRead]
     bindings: list[UserAgentModelBindingRead]
 
 
@@ -295,7 +287,7 @@ class UserModelCallLogRead(BaseModel):
     id: int
     user_id: int
     agent_type: str
-    user_route_id: int
+    route_id: int
     route_name: str
     model: str
     task_id: int | None
@@ -316,7 +308,6 @@ class UserModelCallLogRead(BaseModel):
     released_tokens: int
     usage_estimated: bool
     fallback_from_route_id: int | None
-    fallback_from_user_route_id: int | None
     fallback_reason: str | None
     created_at: datetime
 

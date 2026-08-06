@@ -95,7 +95,9 @@ async def summary(user: CurrentUser, session: SessionDep) -> ApiResponse[dict]:
 async def todos(user: CurrentUser, session: SessionDep) -> ApiResponse[list[RequirementRead]]:
     allowed_stages: set[str] = set()
     if set(user.roles).intersection({"pm", "admin"}):
-        allowed_stages.update(["development_document_review", "final_acceptance"])
+        allowed_stages.update(["development_document_review", "test_plan_review", "final_acceptance"])
+    if set(user.roles).intersection({"qa", "admin"}):
+        allowed_stages.add("test_plan_review")
     if set(user.roles).intersection({"developer", "admin"}):
         allowed_stages.add("development_report_review")
     if not allowed_stages:

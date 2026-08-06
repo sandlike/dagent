@@ -33,6 +33,7 @@ from dagent.models import (
     ReviewRecord,
 )
 from dagent.services.domain import replace_agent_session
+from dagent.services.redaction import redact_sensitive_text
 from dagent.services.workspaces import WorkspaceManagerClient, prepare_task_workspaces
 
 
@@ -133,6 +134,15 @@ class AgentRuntime:
             await session.commit()
 
     async def _run(self) -> None:
+        workers = [asyncio.create_task(self._run_worker()) for _ in range(max(1, self.settings.AGENT_RUNTIME_WORKERS))]
+        try:
+            await asyncio.gather(*workers)
+        finally:
+            for worker in workers:
+                if not worker.done():
+                    worker.cancel()
+
+    async def _run_worker(self) -> None:
         while not self._stopping.is_set():
             try:
                 task_id = await self._claim_next_task()
@@ -624,19 +634,13 @@ class AgentRuntime:
         return evidence
 
     def _redact_tool_text(self, value: str) -> str:
-        redacted = value
-        for secret in (
-            self.settings.AGENT_CALLBACK_TOKEN,
-            self.settings.OPENCODE_SERVER_PASSWORD,
-            self.settings.LLM_API_KEY,
-        ):
-            if secret:
-                redacted = redacted.replace(secret, "<redacted>")
-        redacted = re.sub(r"https?://[^\s/@:]+:[^\s/@]+@", "https://<redacted>@", redacted)
-        return re.sub(
-            r"(?i)(token|password|secret|api[_-]?key)(\s*[=:]\s*)([^\s]+)",
-            r"\1\2<redacted>",
-            redacted,
+        return redact_sensitive_text(
+            value,
+            (
+                self.settings.AGENT_CALLBACK_TOKEN,
+                self.settings.OPENCODE_SERVER_PASSWORD,
+                self.settings.LLM_API_KEY,
+            ),
         )
 
     def _response_content(self, payload: Any) -> str:
@@ -645,10 +649,8 @@ class AgentRuntime:
         info = payload.get("info")
         if isinstance(info, dict):
             structured_output = info.get("structured_output", info.get("structured"))
-            if isinstance(structured_output, dict):
-                return json.dumps(structured_output, ensure_ascii=False)
             if structured_output is not None:
-                raise RuntimeError("OpenCode returned an invalid structured result")
+                return json.dumps(structured_output, ensure_ascii=False)
             error = info.get("error")
             if isinstance(error, dict):
                 data = error.get("data")
@@ -657,10 +659,11 @@ class AgentRuntime:
         parts = payload.get("parts", []) if isinstance(payload, dict) else []
         texts = [str(part.get("text")) for part in parts if part.get("type") == "text" and part.get("text")]
         if not texts:
-            raise RuntimeError("OpenCode returned no final text response")
+            return json.dumps(payload, ensure_ascii=False)
         return "\n".join(texts)
 
     def _build_prompt(self, context: dict[str, Any], *, correction_error: str | None = None) -> str:
+        retry_context = context["checkpoint"].get("retry_context")
         common = (
             f"[DAGENT_CONTEXT task_id={context['task_id']} requirement_id={context['requirement_id']}]\n"
             f"Requirement title: {context['title']}\n"
@@ -678,6 +681,15 @@ class AgentRuntime:
             "when the requirement, user input, repository content, artifacts, or review feedback are Chinese. "
             "Do not output Chinese characters in the final response.\n\n"
         )
+        if isinstance(retry_context, dict):
+            previous_task_id = retry_context.get("previous_task_id")
+            previous_error = self._redact_tool_text(str(retry_context.get("previous_error") or "")).strip()
+            common += (
+                f"This is a retry of task #{previous_task_id}.\n"
+                f"Previous final backend error: {previous_error or 'The previous task did not complete.'}\n"
+                "Continue from the existing Session and workspace state. Do not repeat work that is already "
+                "complete; directly correct the previous failure.\n\n"
+            )
         if correction_error:
             common += (
                 "Your previous response was rejected by backend validation. Correct the complete response once and "
@@ -686,10 +698,19 @@ class AgentRuntime:
         task_type = context["task_type"]
         if task_type == "clarification_generate":
             return common + (
-                "Analyze the requirement and repository read-only. Do not edit files. Write every question, option, "
-                "recommendation, and summary in English. Return only JSON with keys "
+                "Act as a grill-me requirement clarification agent. Analyze the requirement and repository read-only. "
+                "First inspect the codebase and resolve facts yourself; do not ask the user about decisions that can "
+                "be answered from existing code, models, APIs, dependencies, or conventions. Walk the decision tree, "
+                "ask one focused unresolved decision per question, and identify dependencies between decisions. "
+                "Use the existing clarification rounds and answers in Current approved artifacts to avoid repeating "
+                "questions; ask only the next unresolved decisions. Every question must include a concrete AI "
+                "recommendation grounded in a file or code pattern and a brief reason. Do not edit files. "
+                "Write every question, option, recommendation, and summary in English. Return only JSON with keys "
                 '"output_summary" and "clarification_questions". Each question must contain question, '
                 'question_type (single|multiple|text|file), required, options, and ai_recommendation. '
+                "Generate 3 to 6 focused questions when unresolved decisions remain; use an empty list only when "
+                "the requirement is fully specified. Single/multiple questions must have 2 to 4 options with unique "
+                "ids, labels, and descriptions; text questions must have an empty options list. "
                 "Escape any ASCII double quotes inside JSON string values."
             )
         if task_type == "development_document_generation":
@@ -717,6 +738,12 @@ class AgentRuntime:
                 if task_type == "development"
                 else "Fix the verified code failure or rejected implementation feedback"
             )
+            if isinstance(retry_context, dict):
+                common += (
+                    "Existing code changes from the previous attempt are preserved. Do not implement them again. "
+                    "Fix the test command or other reported problem, use the correct repository directory, and "
+                    "rerun the required unit test and smoke test before returning the development report.\n\n"
+                )
             return common + (
                 f"{instruction} in the provided requirement-scoped repositories. "
                 "Modify only files under the workspace. Run the smallest relevant unit test and one simple smoke "
@@ -874,6 +901,51 @@ class AgentRuntime:
             current = await manager.status(workspace["path"])
             if str(current.get("head_commit") or "") != str(workspace.get("head_commit") or ""):
                 raise RuntimeError("Read-only Agent changed the workspace HEAD commit")
+
+    async def _reconcile_report_changed_files(
+        self,
+        task_id: int,
+        context: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Compatibility helper for callers that explicitly request workspace metadata.
+
+        The Agent execution path no longer calls this helper.  It is retained for
+        read-only diagnostics and never participates in result validation.
+        """
+        artifact = result.get("artifact_content")
+        if not isinstance(artifact, dict):
+            return result
+        existing = artifact.get("changed_files")
+        if isinstance(existing, list) and any(
+            isinstance(item, dict) and str(item.get("path") or "").strip()
+            for item in existing
+        ):
+            return result
+        manager = WorkspaceManagerClient(self.settings)
+        reconciled: list[dict[str, str]] = []
+        for workspace in context.get("workspaces", []):
+            try:
+                status = await manager.status(workspace["path"])
+            except Exception:
+                continue
+            raw_files = status.get("changed_files")
+            if not isinstance(raw_files, list):
+                continue
+            for item in raw_files:
+                if isinstance(item, str) and item.strip():
+                    reconciled.append({"path": item.strip(), "change": "modified"})
+                elif isinstance(item, dict) and str(item.get("path") or "").strip():
+                    reconciled.append(
+                        {
+                            "path": str(item["path"]).strip(),
+                            "change": str(item.get("change") or "modified"),
+                        }
+                    )
+        if reconciled:
+            artifact["changed_files"] = reconciled
+            await self._log(task_id, "info", f"Reconciled {len(reconciled)} changed file(s) from workspace status")
+        return result
 
     async def _commit_changes(
         self,

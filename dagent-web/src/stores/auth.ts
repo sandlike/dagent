@@ -30,6 +30,20 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('token', response.data.access_token)
   }
 
+  async function quickLogin(username: string) {
+    if (isDemoMode) {
+      token.value = `demo-token-${Date.now()}`
+      localStorage.setItem('token', token.value)
+      const matched = mockUsers.find((item) => item.username === username) || mockUsers[0]
+      user.value = { ...matched, roles: [matched.role] }
+      return
+    }
+    const response = await authApi.quickLogin({ username })
+    token.value = response.data.access_token
+    user.value = response.data.user
+    localStorage.setItem('token', response.data.access_token)
+  }
+
   async function fetchUser() {
     if (!token.value) return
     if (isDemoMode) {
@@ -71,6 +85,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     canDevelop,
     login,
+    quickLogin,
     fetchUser,
     fetchUsers,
     logout,

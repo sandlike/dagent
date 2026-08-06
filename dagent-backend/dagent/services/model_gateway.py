@@ -4,7 +4,8 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urljoin, urlparse
+from typing import cast
+from urllib.parse import urljoin
 
 import httpx
 from sqlalchemy import select, update
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dagent.api.errors import InvalidStateError, NotFoundError
 from dagent.api.schemas.model_gateway import (
+    DetectedApiProtocol,
     ModelFallbackRequest,
     ModelReservationRead,
     ModelReservationRequest,
@@ -19,7 +21,6 @@ from dagent.api.schemas.model_gateway import (
     ModelRouteTestResult,
     ModelSettlementRequest,
 )
-from dagent.config import get_settings
 from dagent.models import (
     AgentTask,
     ModelCallLog,
@@ -31,6 +32,8 @@ from dagent.models import (
     UserModelQuota,
     UserModelRoute,
 )
+from dagent.services.credentials import decrypt_model_token
+from dagent.services.redaction import redact_sensitive_text
 
 AGENT_MODEL_TYPES = ("requirement_clarification", "development")
 DEFAULT_USER_QUOTA = 50_000
@@ -42,7 +45,66 @@ class UserBudgetExceeded(RuntimeError):
     pass
 
 
-def resolve_model_credential(reference: str | None) -> str | None:
+def _model_response_text(body: object) -> str:
+    if not isinstance(body, dict):
+        raise ValueError("Model returned a non-object response")
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("Model returned no choices")
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            blocks = [
+                str(block.get("text") or "").strip()
+                for block in content
+                if isinstance(block, dict) and str(block.get("text") or "").strip()
+            ]
+            if blocks:
+                return "\n".join(blocks)
+        text = choice.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    raise ValueError("Model returned an empty response")
+
+
+def _responses_response_text(body: object) -> str:
+    if not isinstance(body, dict):
+        raise ValueError("Responses API returned a non-object response")
+    output = body.get("output")
+    if not isinstance(output, list):
+        raise ValueError("Responses API returned no output")
+    text_parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in {"output_text", "text"}:
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text.strip())
+    if not text_parts:
+        raise ValueError("Responses API returned an empty response")
+    return "\n".join(text_parts)
+
+
+def configured_api_protocol(route: object) -> str:
+    configured = getattr(route, "api_protocol", None) or "auto"
+    if configured == "auto":
+        return getattr(route, "detected_api_protocol", None) or "chat_completions"
+    return configured
+
+
+def resolve_model_credential(reference: str | None, ciphertext: str | None = None) -> str | None:
+    if ciphertext:
+        return decrypt_model_token(ciphertext)
     if reference is None:
         return None
     if not reference.startswith("env://"):
@@ -56,35 +118,89 @@ def resolve_model_credential(reference: str | None) -> str | None:
     return value
 
 
-def _validate_probe_url(base_url: str) -> None:
-    parsed = urlparse(base_url)
-    host = (parsed.hostname or "").lower()
-    if parsed.scheme not in {"http", "https"} or not host:
-        raise ValueError("Model route must use an HTTP(S) URL")
-    if host not in get_settings().model_route_allowed_hosts:
-        raise ValueError(f"Model route host {host} is not in MODEL_ROUTE_ALLOWED_HOSTS")
-
-
 async def probe_model_route(route: ModelRoute) -> ModelRouteTestResult:
     started_at = time.perf_counter()
+    api_key: str | None = None
     try:
-        _validate_probe_url(route.base_url)
-        api_key = resolve_model_credential(route.credential_ref)
+        api_key = resolve_model_credential(route.credential_ref, route.credential_ciphertext)
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         timeout = min(route.timeout_ms / 1000, 30)
         models_url = urljoin(route.base_url.rstrip("/") + "/", "models")
+        configured_protocol = getattr(route, "api_protocol", None) or "auto"
+        protocols = (
+            [configured_protocol]
+            if configured_protocol != "auto"
+            else ["chat_completions", "responses"]
+        )
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            response = await client.get(models_url, headers=headers)
-        response.raise_for_status()
-        body = response.json()
-        samples = [str(item.get("id")) for item in body.get("data", [])[:5] if item.get("id")]
+            models_response = await client.get(models_url, headers=headers)
+            samples: list[str] = []
+            if 200 <= models_response.status_code < 300:
+                try:
+                    models_body = models_response.json()
+                except ValueError:
+                    models_body = {}
+                raw_models = models_body.get("data", []) if isinstance(models_body, dict) else []
+                if isinstance(raw_models, list):
+                    samples = [
+                        str(item.get("id"))
+                        for item in raw_models[:5]
+                        if isinstance(item, dict) and item.get("id")
+                    ]
+            failures: list[str] = []
+            response_text = ""
+            detected_protocol: str | None = None
+            for protocol in protocols:
+                endpoint_name = "chat/completions" if protocol == "chat_completions" else "responses"
+                endpoint_url = urljoin(route.base_url.rstrip("/") + "/", endpoint_name)
+                request_payload: dict[str, object]
+                if protocol == "responses":
+                    request_payload = {
+                        "model": route.model,
+                        "input": "Reply with exactly: OK",
+                        "max_output_tokens": 256,
+                        "stream": False,
+                    }
+                else:
+                    request_payload = {
+                        "model": route.model,
+                        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                        "max_tokens": 256,
+                        "stream": False,
+                    }
+                response = await client.post(endpoint_url, headers=headers, json=request_payload)
+                try:
+                    response.raise_for_status()
+                    body = response.json()
+                    response_text = (
+                        _responses_response_text(body)
+                        if protocol == "responses"
+                        else _model_response_text(body)
+                    )
+                except httpx.HTTPError:
+                    status = getattr(response, "status_code", "unknown")
+                    failures.append(f"{endpoint_name}: HTTP {status}")
+                    continue
+                except (TypeError, ValueError) as exc:
+                    content_type = getattr(response, "headers", {}).get("content-type", "unknown")
+                    status = getattr(response, "status_code", "unknown")
+                    failures.append(
+                        f"{endpoint_name}: {str(exc)} (HTTP {status}, content-type {content_type})"
+                    )
+                    continue
+                detected_protocol = protocol
+                break
+            if detected_protocol is None:
+                raise ValueError("No supported model API protocol detected: " + "; ".join(failures))
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         return ModelRouteTestResult(
             ok=True,
             latency_ms=latency_ms,
             health_status="healthy",
             sample_models=samples,
-            message="Model gateway connection succeeded",
+            response_preview=redact_sensitive_text(response_text, (api_key or "",))[:200],
+            detected_api_protocol=cast(DetectedApiProtocol, detected_protocol),
+            message=f"Model gateway response succeeded using {detected_protocol}",
         )
     except (ValueError, httpx.HTTPError, TypeError) as exc:
         latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -92,7 +208,7 @@ async def probe_model_route(route: ModelRoute) -> ModelRouteTestResult:
             ok=False,
             latency_ms=latency_ms,
             health_status="unhealthy",
-            message=str(exc),
+            message=redact_sensitive_text(str(exc), (api_key or "",))[:2000],
         )
 
 
@@ -107,7 +223,7 @@ async def ensure_user_model_profile(
     *,
     tenant_id: int,
     user_id: int,
-) -> tuple[UserModelQuota, list[UserModelRoute], list[UserAgentModelBinding]]:
+) -> tuple[UserModelQuota, list[ModelRoute], list[UserAgentModelBinding]]:
     owner_id = await session.scalar(
         select(User.id)
         .where(User.id == user_id, User.tenant_id == tenant_id, User.status == "active")
@@ -136,46 +252,12 @@ async def ensure_user_model_profile(
     routes = list(
         (
             await session.scalars(
-                select(UserModelRoute)
-                .where(
-                    UserModelRoute.tenant_id == tenant_id,
-                    UserModelRoute.user_id == user_id,
-                )
-                .order_by(UserModelRoute.priority, UserModelRoute.id)
+                select(ModelRoute)
+                .where(ModelRoute.tenant_id == tenant_id, ModelRoute.status == "active")
+                .order_by(ModelRoute.priority, ModelRoute.id)
             )
         ).all()
     )
-    if not routes:
-        platform_routes = list(
-            (
-                await session.scalars(
-                    select(ModelRoute)
-                    .where(ModelRoute.tenant_id == tenant_id, ModelRoute.status == "active")
-                    .order_by(ModelRoute.priority, ModelRoute.id)
-                )
-            ).all()
-        )
-        if platform_routes:
-            route_specs = platform_routes if len(platform_routes) > 1 else [platform_routes[0], platform_routes[0]]
-            levels = ("high", "standard", "economy")
-            for index, platform_route in enumerate(route_specs):
-                route = UserModelRoute(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    model_route_id=platform_route.id,
-                    name=(
-                        platform_route.name
-                        if len(platform_routes) > 1
-                        else ("Primary route" if index == 0 else "Backup route")
-                    ),
-                    level=levels[min(index, len(levels) - 1)],
-                    priority=index + 1,
-                    quota_limit=DEFAULT_USER_QUOTA,
-                    status="active",
-                )
-                session.add(route)
-                routes.append(route)
-            await session.flush()
 
     reset_at = quota.reset_at
     if reset_at is not None and reset_at.tzinfo is None:
@@ -184,10 +266,25 @@ async def ensure_user_model_profile(
         quota.quota_used = 0
         quota.reset_at = datetime.now(UTC) + timedelta(days=30)
         quota.version += 1
-        for route in routes:
-            if route.quota_reserved == 0:
-                route.quota_used = 0
-                route.version += 1
+    legacy_routes = list(
+        (
+            await session.scalars(
+                select(UserModelRoute).where(
+                    UserModelRoute.tenant_id == tenant_id,
+                    UserModelRoute.user_id == user_id,
+                )
+            )
+        ).all()
+    )
+    legacy_route_map = {route.id: route.model_route_id for route in legacy_routes}
+    route_ids = {route.id for route in routes}
+
+    def route_ids_for_agent(agent_type: str) -> list[int]:
+        return [
+            route.id
+            for route in routes
+            if not route.agent_types or agent_type in route.agent_types
+        ]
 
     bindings = list(
         (
@@ -201,15 +298,26 @@ async def ensure_user_model_profile(
         ).all()
     )
     bindings_by_type = {binding.agent_type: binding for binding in bindings}
-    default_route_ids = [route.id for route in sorted(routes, key=lambda item: (item.priority, item.id))]
     for agent_type in AGENT_MODEL_TYPES:
+        allowed_route_ids = route_ids_for_agent(agent_type)
         if agent_type in bindings_by_type:
+            binding = bindings_by_type[agent_type]
+            migrated_route_ids = [legacy_route_map.get(route_id, route_id) for route_id in binding.route_ids]
+            normalized_route_ids = [
+                route_id
+                for route_id in migrated_route_ids
+                if route_id in allowed_route_ids and route_id in route_ids
+            ]
+            normalized_route_ids = list(dict.fromkeys(normalized_route_ids))
+            if normalized_route_ids != binding.route_ids:
+                binding.route_ids = normalized_route_ids
+                binding.version += 1
             continue
         binding = UserAgentModelBinding(
             tenant_id=tenant_id,
             user_id=user_id,
             agent_type=agent_type,
-            route_ids=default_route_ids,
+            route_ids=allowed_route_ids,
         )
         session.add(binding)
         bindings.append(binding)
@@ -244,46 +352,31 @@ async def _candidate_routes(
     agent_type: str,
     environment: str,
     excluded_route_ids: set[int],
-) -> tuple[UserModelQuota, list[tuple[UserModelRoute, ModelRoute]]]:
-    quota, user_routes, bindings = await ensure_user_model_profile(
+) -> tuple[UserModelQuota, list[ModelRoute]]:
+    quota, routes, bindings = await ensure_user_model_profile(
         session,
         tenant_id=tenant_id,
         user_id=user_id,
     )
     binding = next((item for item in bindings if item.agent_type == agent_type), None)
-    ordered_ids = binding.route_ids if binding is not None else [route.id for route in user_routes]
+    ordered_ids = binding.route_ids if binding is not None else [route.id for route in routes]
     if not quota.auto_fallback:
         ordered_ids = ordered_ids[:1]
-    routes_by_id = {route.id: route for route in user_routes}
-    selected_user_routes = [
+    routes_by_id = {route.id: route for route in routes}
+    candidates = [
         routes_by_id[route_id]
         for route_id in ordered_ids
         if route_id in routes_by_id
         and route_id not in excluded_route_ids
         and routes_by_id[route_id].status == "active"
-    ]
-    platform_route_ids = {route.model_route_id for route in selected_user_routes}
-    platform_routes = list(
-        (
-            await session.scalars(
-                select(ModelRoute)
-                .where(
-                    ModelRoute.tenant_id == tenant_id,
-                    ModelRoute.id.in_(platform_route_ids),
-                    ModelRoute.status == "active",
-                )
-            )
-        ).all()
-    )
-    platform_by_id = {route.id: route for route in platform_routes}
-    candidates = [
-        (user_route, platform_by_id[user_route.model_route_id])
-        for user_route in selected_user_routes
-        if user_route.model_route_id in platform_by_id
-        and platform_by_id[user_route.model_route_id].health_status != "unhealthy"
+        and routes_by_id[route_id].health_status != "unhealthy"
         and (
-            not platform_by_id[user_route.model_route_id].environments
-            or environment in platform_by_id[user_route.model_route_id].environments
+            not routes_by_id[route_id].agent_types
+            or agent_type in routes_by_id[route_id].agent_types
+        )
+        and (
+            not routes_by_id[route_id].environments
+            or environment in routes_by_id[route_id].environments
         )
     ]
     return quota, candidates
@@ -293,7 +386,6 @@ async def _reserve_candidate(
     session: AsyncSession,
     *,
     quota: UserModelQuota,
-    user_route: UserModelRoute,
     route: ModelRoute,
     user_id: int,
     agent_type: str,
@@ -305,20 +397,19 @@ async def _reserve_candidate(
     estimated_input_tokens: int,
     output_token_budget: int,
     fallback_from_route_id: int | None,
-    fallback_from_user_route_id: int | None,
     fallback_reason: str | None,
     trace_id: str,
 ) -> ModelReservationRead | None:
     result = await session.execute(
-        update(UserModelRoute)
+        update(ModelRoute)
         .where(
-            UserModelRoute.id == user_route.id,
-            UserModelRoute.user_id == user_id,
-            UserModelRoute.status == "active",
-            UserModelRoute.quota_used + UserModelRoute.quota_reserved + estimated_tokens
-            <= UserModelRoute.quota_limit,
+            ModelRoute.id == route.id,
+            ModelRoute.tenant_id == task.tenant_id,
+            ModelRoute.status == "active",
+            ModelRoute.quota_used + ModelRoute.quota_reserved + estimated_tokens
+            <= ModelRoute.quota_limit,
         )
-        .values(quota_reserved=UserModelRoute.quota_reserved + estimated_tokens)
+        .values(quota_reserved=ModelRoute.quota_reserved + estimated_tokens)
     )
     if getattr(result, "rowcount", 0) != 1:
         return None
@@ -336,16 +427,15 @@ async def _reserve_candidate(
     )
     if getattr(quota_result, "rowcount", 0) != 1:
         await session.execute(
-            update(UserModelRoute)
-            .where(UserModelRoute.id == user_route.id)
-            .values(quota_reserved=UserModelRoute.quota_reserved - estimated_tokens)
+            update(ModelRoute)
+            .where(ModelRoute.id == route.id)
+            .values(quota_reserved=ModelRoute.quota_reserved - estimated_tokens)
         )
         raise UserBudgetExceeded
 
     ledger = ModelQuotaLedger(
         tenant_id=task.tenant_id,
         user_id=user_id,
-        user_route_id=user_route.id,
         route_id=route.id,
         task_id=task.id,
         request_id=request_id,
@@ -358,7 +448,6 @@ async def _reserve_candidate(
         ModelCallLog(
             tenant_id=task.tenant_id,
             user_id=user_id,
-            user_route_id=user_route.id,
             agent_type=agent_type,
             route_id=route.id,
             task_id=task.id,
@@ -372,7 +461,6 @@ async def _reserve_candidate(
             output_token_budget=output_token_budget,
             reserved_tokens=estimated_tokens,
             fallback_from_route_id=fallback_from_route_id,
-            fallback_from_user_route_id=fallback_from_user_route_id,
             fallback_reason=fallback_reason,
         )
     )
@@ -418,13 +506,11 @@ async def reserve_model_route(
     )
     trace_id = uuid.uuid4().hex
     fallback_from_route_id: int | None = None
-    fallback_from_user_route_id: int | None = None
-    for user_route, route in candidates:
+    for route in candidates:
         try:
             reservation = await _reserve_candidate(
                 session,
                 quota=quota,
-                user_route=user_route,
                 route=route,
                 user_id=user_id,
                 agent_type=agent_type,
@@ -436,8 +522,7 @@ async def reserve_model_route(
                 estimated_input_tokens=payload.estimated_input_tokens,
                 output_token_budget=payload.output_token_budget,
                 fallback_from_route_id=fallback_from_route_id,
-                fallback_from_user_route_id=fallback_from_user_route_id,
-                fallback_reason=("quota_exhausted" if fallback_from_user_route_id is not None else None),
+                fallback_reason=("quota_exhausted" if fallback_from_route_id is not None else None),
                 trace_id=trace_id,
             )
         except UserBudgetExceeded:
@@ -447,7 +532,6 @@ async def reserve_model_route(
             await session.commit()
             return reservation
         fallback_from_route_id = route.id
-        fallback_from_user_route_id = user_route.id
     await session.rollback()
     raise InvalidStateError(ALL_MODEL_NODES_QUOTA_EXHAUSTED)
 
@@ -504,26 +588,19 @@ async def fallback_model_route(
     ):
         raise InvalidStateError(f"Fallback is not allowed for {payload.error_type}")
 
-    if previous.user_id is not None and previous.user_route_id is not None:
-        await session.execute(
-            update(UserModelRoute)
-            .where(UserModelRoute.id == previous.user_route_id)
-            .values(quota_reserved=UserModelRoute.quota_reserved - previous.reserved_tokens)
+    await session.execute(
+        update(ModelRoute)
+        .where(ModelRoute.id == previous.route_id)
+        .values(quota_reserved=ModelRoute.quota_reserved - previous.reserved_tokens)
+    )
+    await session.execute(
+        update(UserModelQuota)
+        .where(
+            UserModelQuota.tenant_id == task.tenant_id,
+            UserModelQuota.user_id == user_id,
         )
-        await session.execute(
-            update(UserModelQuota)
-            .where(
-                UserModelQuota.tenant_id == task.tenant_id,
-                UserModelQuota.user_id == previous.user_id,
-            )
-            .values(quota_reserved=UserModelQuota.quota_reserved - previous.reserved_tokens)
-        )
-    else:
-        await session.execute(
-            update(ModelRoute)
-            .where(ModelRoute.id == previous.route_id)
-            .values(quota_reserved=ModelRoute.quota_reserved - previous.reserved_tokens)
-        )
+        .values(quota_reserved=UserModelQuota.quota_reserved - previous.reserved_tokens)
+    )
     previous.status = "failed"
     previous.released_tokens = previous.reserved_tokens
     previous.settled_at = datetime.now(UTC)
@@ -544,10 +621,9 @@ async def fallback_model_route(
     attempted_route_ids = set(
         (
             await session.scalars(
-                select(ModelQuotaLedger.user_route_id).where(
+                select(ModelQuotaLedger.route_id).where(
                     ModelQuotaLedger.tenant_id == task.tenant_id,
                     ModelQuotaLedger.request_id == request_id,
-                    ModelQuotaLedger.user_route_id.is_not(None),
                 )
             )
         ).all()
@@ -560,12 +636,11 @@ async def fallback_model_route(
         environment=payload.environment,
         excluded_route_ids={route_id for route_id in attempted_route_ids if route_id is not None},
     )
-    for user_route, route in candidates:
+    for route in candidates:
         try:
             reservation = await _reserve_candidate(
                 session,
                 quota=quota,
-                user_route=user_route,
                 route=route,
                 user_id=user_id,
                 agent_type=agent_type,
@@ -577,7 +652,6 @@ async def fallback_model_route(
                 estimated_input_tokens=payload.estimated_input_tokens,
                 output_token_budget=payload.output_token_budget,
                 fallback_from_route_id=previous.route_id,
-                fallback_from_user_route_id=previous.user_route_id,
                 fallback_reason=payload.error_type,
                 trace_id=previous_log.trace_id if previous_log is not None else uuid.uuid4().hex,
             )
@@ -611,22 +685,16 @@ async def fail_model_route(
     )
     if ledger is None or ledger.status != "reserved":
         return
-    if ledger.user_id is not None and ledger.user_route_id is not None:
-        await session.execute(
-            update(UserModelRoute)
-            .where(UserModelRoute.id == ledger.user_route_id)
-            .values(quota_reserved=UserModelRoute.quota_reserved - ledger.reserved_tokens)
-        )
+    await session.execute(
+        update(ModelRoute)
+        .where(ModelRoute.id == ledger.route_id)
+        .values(quota_reserved=ModelRoute.quota_reserved - ledger.reserved_tokens)
+    )
+    if ledger.user_id is not None:
         await session.execute(
             update(UserModelQuota)
             .where(UserModelQuota.tenant_id == task.tenant_id, UserModelQuota.user_id == ledger.user_id)
             .values(quota_reserved=UserModelQuota.quota_reserved - ledger.reserved_tokens)
-        )
-    else:
-        await session.execute(
-            update(ModelRoute)
-            .where(ModelRoute.id == ledger.route_id)
-            .values(quota_reserved=ModelRoute.quota_reserved - ledger.reserved_tokens)
         )
     ledger.status = "failed"
     ledger.released_tokens = ledger.reserved_tokens
@@ -670,36 +738,22 @@ async def settle_model_route(
     if actual_tokens > ledger.reserved_tokens:
         raise InvalidStateError("Actual token usage exceeds the reservation")
     released_tokens = ledger.reserved_tokens - actual_tokens
-    if ledger.user_id is not None and ledger.user_route_id is not None:
-        await session.execute(
-            update(UserModelRoute)
-            .where(UserModelRoute.id == ledger.user_route_id)
-            .values(
-                quota_reserved=UserModelRoute.quota_reserved - ledger.reserved_tokens,
-                quota_used=UserModelRoute.quota_used + actual_tokens,
-            )
+    await session.execute(
+        update(ModelRoute)
+        .where(ModelRoute.id == ledger.route_id)
+        .values(
+            quota_reserved=ModelRoute.quota_reserved - ledger.reserved_tokens,
+            quota_used=ModelRoute.quota_used + actual_tokens,
+            last_called_at=datetime.now(UTC),
         )
+    )
+    if ledger.user_id is not None:
         await session.execute(
             update(UserModelQuota)
             .where(UserModelQuota.tenant_id == task.tenant_id, UserModelQuota.user_id == ledger.user_id)
             .values(
                 quota_reserved=UserModelQuota.quota_reserved - ledger.reserved_tokens,
                 quota_used=UserModelQuota.quota_used + actual_tokens,
-            )
-        )
-        await session.execute(
-            update(ModelRoute)
-            .where(ModelRoute.id == ledger.route_id)
-            .values(last_called_at=datetime.now(UTC))
-        )
-    else:
-        await session.execute(
-            update(ModelRoute)
-            .where(ModelRoute.id == ledger.route_id)
-            .values(
-                quota_reserved=ModelRoute.quota_reserved - ledger.reserved_tokens,
-                quota_used=ModelRoute.quota_used + actual_tokens,
-                last_called_at=datetime.now(UTC),
             )
         )
     ledger.input_tokens = payload.input_tokens

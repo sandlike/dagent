@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-me-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    QUICK_LOGIN_ENABLED: bool = False
 
     # Internal service authentication
     AGENT_CALLBACK_TOKEN: str = "change-me-agent-callback-token"
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     WORKSPACE_MANAGER_URL: str = "http://dagent-development-agent:8090"
     GIT_CREDENTIAL_ENCRYPTION_KEY: str = ""
     AGENT_POLL_INTERVAL_SECONDS: float = 2.0
+    AGENT_RUNTIME_WORKERS: int = 2
     AGENT_TASK_TIMEOUT_SECONDS: int = 3600
     AGENT_INTERNAL_API_URL: str = "http://127.0.0.1:8000/api/v1"
     AGENT_WORKSPACE_ROOT: str = "/workspaces"
@@ -40,13 +42,6 @@ class Settings(BaseSettings):
     LLM_API_BASE_URL: str = ""
     LLM_API_KEY: str = ""
     LLM_MODEL: str = "deepseek-chat"
-
-    # Model gateway
-    MODEL_ROUTE_ALLOWED_HOSTS: str = (
-        "higress-gateway.higress-system.svc,"
-        "api.deepseek.com,api.openai.com,dashscope.aliyuncs.com,"
-        "localhost,127.0.0.1"
-    )
 
     # Integrations
     TEAM_API_BASE_URL: str = ""
@@ -61,11 +56,6 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
-
-    @property
-    def model_route_allowed_hosts(self) -> set[str]:
-        return {host.strip().lower() for host in self.MODEL_ROUTE_ALLOWED_HOSTS.split(",") if host.strip()}
-
 
 @lru_cache
 def get_settings() -> Settings:

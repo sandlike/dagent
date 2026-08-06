@@ -213,10 +213,8 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
             headers=pm["headers"],
         )
     )
-    normalized_document = development_document_versions[0]["content"]
-    assert normalized_document["schema_version"] == 1
-    assert normalized_document["impacted_modules"][0]["name"] == "orders"
-    assert normalized_document["rollback_plan"] == ["revert commit"]
+    stored_document = development_document_versions[0]["content"]
+    assert stored_document == {"modules": ["orders", "risk"], "rollback": "revert commit"}
     requirement = payload(await client.get(f"/api/v1/requirements/{requirement['id']}", headers=pm["headers"]))
     assert requirement["stage"] == "development_document_review"
     no_comment = await client.post(
@@ -301,12 +299,19 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
         json={
             "status": "succeeded",
             "artifact_type": "test_plan",
-            "artifact_content": {"test_scope": ["Order risk limit"]},
+            "artifact_content": "free-form Agent test plan output",
         },
         headers={"Authorization": "Bearer test-agent-token"},
     )
-    assert invalid_test_plan.status_code == 409
-    assert "test_environment" in invalid_test_plan.json()["message"]
+    assert invalid_test_plan.status_code == 200
+    assert invalid_test_plan.json()["data"]["status"] == "succeeded"
+    stored_raw_plan = payload(
+        await client.get(
+            f"/api/v1/requirements/{requirement['id']}/artifacts/test_plan/versions",
+            headers=developer["headers"],
+        )
+    )
+    assert stored_raw_plan[0]["content"] == "free-form Agent test plan output"
     await task_result(
         client,
         test_plan_task_id,
@@ -335,8 +340,22 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
     assert requirement_session["id"] == requirement_session_id
     assert next(item for item in sessions if item["role_type"] == "development")["id"] == development_session_id
     requirement = payload(await client.get(f"/api/v1/requirements/{requirement['id']}", headers=pm["headers"]))
-    assert requirement["stage"] == "final_acceptance"
+    assert requirement["stage"] == "test_plan_review"
     assert requirement["run_status"] == "waiting_human"
+    test_plan_review = payload(
+        await client.post(
+            f"/api/v1/requirements/{requirement['id']}/reviews/test_plan",
+            json={
+                "action": "approve",
+                "comment": "The manual test plan is complete",
+                "artifact_version": 1,
+                "resource_version": requirement["version"],
+            },
+            headers={**pm["headers"], "Idempotency-Key": "approve-test-plan-1"},
+        )
+    )
+    assert test_plan_review["stage"] == "final_acceptance"
+    requirement = payload(await client.get(f"/api/v1/requirements/{requirement['id']}", headers=pm["headers"]))
 
     rework = payload(
         await client.post(
@@ -405,6 +424,58 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
         },
     )
     requirement = payload(await client.get(f"/api/v1/requirements/{requirement['id']}", headers=pm["headers"]))
+    assert requirement["stage"] == "test_plan_review"
+    rejected_test_plan = payload(
+        await client.post(
+            f"/api/v1/requirements/{requirement['id']}/reviews/test_plan",
+            json={
+                "action": "reject",
+                "comment": "Add a manual case for an order below the limit",
+                "artifact_version": 2,
+                "resource_version": requirement["version"],
+            },
+            headers={**pm["headers"], "Idempotency-Key": "reject-test-plan-2"},
+        )
+    )
+    assert rejected_test_plan["stage"] == "test_plan_generation"
+    third_task_detail = payload(
+        await client.post(
+            f"/api/v1/requirements/{requirement['id']}/tasks",
+            json={"input_summary": "Revise the manual test plan using the rejection feedback"},
+            headers={**developer["headers"], "Idempotency-Key": "test-plan-3"},
+        )
+    )
+    assert third_task_detail["task_type"] == "test_plan_generation"
+    assert third_task_detail["session_id"] == development_session_id
+    await task_result(
+        client,
+        third_task_detail["id"],
+        {
+            "status": "succeeded",
+            "artifact_type": "test_plan",
+            "artifact_content": manual_test_plan(
+                "TC-RISK-003",
+                "Accept an order below the limit",
+                "The order is accepted",
+            ),
+        },
+    )
+    requirement = payload(await client.get(f"/api/v1/requirements/{requirement['id']}", headers=pm["headers"]))
+    assert requirement["stage"] == "test_plan_review"
+    final_test_plan_review = payload(
+        await client.post(
+            f"/api/v1/requirements/{requirement['id']}/reviews/test_plan",
+            json={
+                "action": "approve",
+                "comment": "Revised manual test plan approved",
+                "artifact_version": 3,
+                "resource_version": requirement["version"],
+            },
+            headers={**pm["headers"], "Idempotency-Key": "approve-test-plan-3"},
+        )
+    )
+    assert final_test_plan_review["stage"] == "final_acceptance"
+    requirement = payload(await client.get(f"/api/v1/requirements/{requirement['id']}", headers=pm["headers"]))
 
     async with async_session() as session:
         stored_requirement = await session.get(Requirement, requirement["id"])
@@ -443,7 +514,7 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
         json={
             "action": "approve",
             "comment": "Accepted",
-            "artifact_version": 2,
+            "artifact_version": 3,
             "resource_version": requirement["version"],
             "final_confirmation": False,
         },
@@ -455,7 +526,7 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
         json={
             "action": "approve",
             "comment": "Accepted by product owner",
-            "artifact_version": 2,
+            "artifact_version": 3,
             "resource_version": requirement["version"],
             "final_confirmation": True,
         },
@@ -471,7 +542,7 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
             json={
                 "action": "approve",
                 "comment": "Accepted by product owner",
-                "artifact_version": 2,
+                "artifact_version": 3,
                 "resource_version": requirement["version"],
                 "final_confirmation": True,
             },
@@ -488,7 +559,7 @@ async def test_complete_pipeline_uses_two_long_lived_agent_sessions(client, user
         )
     )
     assert history["current_stage"] == "completed"
-    assert len(history["history"]) == 12
+    assert len(history["history"]) == 16
 
 
 async def test_stale_resource_version_is_rejected(client, users):

@@ -79,7 +79,15 @@ const selectedTask = ref<AgentTask | null>(null)
 const showEditDialog = ref(false)
 const editForm = reactive({ title: '', description: '', priority: 'P2', repository_ids: [] as number[] })
 let pollTimer: number | undefined
+let logPollTimer: number | undefined
 let eventController: AbortController | undefined
+
+const taskIsStale = computed(() => {
+  if (!selectedTask.value || selectedTask.value.status !== 'running') return false
+  const latest = taskLogs.value[taskLogs.value.length - 1]?.created_at
+  const reference = latest || selectedTask.value.started_at || selectedTask.value.updated_at
+  return Boolean(reference && Date.now() - new Date(reference).getTime() > 120_000)
+})
 
 const activeStageIndex = computed(() => {
   if (!requirement.value) return 0
@@ -104,6 +112,7 @@ const currentGate = computed<{ gate: ReviewGate; artifact: string } | null>(() =
   const stage = requirement.value?.stage
   if (stage === 'development_document_review') return { gate: 'development_document', artifact: 'development_document' }
   if (stage === 'development_report_review') return { gate: 'development_report', artifact: 'development_report' }
+  if (stage === 'test_plan_review') return { gate: 'test_plan', artifact: 'test_plan' }
   if (stage === 'final_acceptance') {
     const artifact = ['test_plan', 'test_cases', 'development_report']
       .find((type) => artifacts.value.some((item) => item.type === type)) || 'test_plan'
@@ -121,12 +130,18 @@ const currentGateArtifact = computed(() =>
   currentGate.value ? artifacts.value.find((item) => item.type === currentGate.value?.artifact) : undefined,
 )
 const canReviseCurrentArtifact = computed(() => {
-  if (!currentGate.value || currentGate.value.gate === 'final_acceptance') return false
+  if (!currentGate.value || ['test_plan', 'final_acceptance'].includes(currentGate.value.gate)) return false
   return selectedArtifactType.value === currentGate.value.artifact
     && selectedArtifactVersion.value?.version === currentGateArtifact.value?.current_version
 })
 const isTestPlanGeneration = computed(() => requirement.value?.stage === 'test_plan_generation')
 const hasActiveTask = computed(() => tasks.value.some((task) => ['queued', 'running'].includes(task.status)))
+const latestCurrentStageTask = computed(() => {
+  if (!requirement.value) return undefined
+  return tasks.value
+    .filter((task) => task.stage === requirement.value?.stage)
+    .sort((left, right) => right.id - left.id)[0]
+})
 
 const reviewActionLabels = {
   approve: '通过',
@@ -263,9 +278,26 @@ async function saveDraft() {
 }
 
 async function generateClarification() {
+  if (!requirement.value || taskStarting.value || hasActiveTask.value) return
+  taskStarting.value = true
+  try {
+    if (latestCurrentStageTask.value?.status === 'failed') {
+      await requirementApi.retryTask(latestCurrentStageTask.value.id)
+      ElMessage.success(`已根据任务 #${latestCurrentStageTask.value.id} 的失败信息创建重试任务`)
+    } else {
+      await requirementApi.generateClarification(requirement.value.id)
+      ElMessage.success('澄清任务已进入队列')
+    }
+    await loadAll()
+  } finally {
+    taskStarting.value = false
+  }
+}
+
+async function reopenClarification() {
   if (!requirement.value) return
-  await requirementApi.generateClarification(requirement.value.id)
-  ElMessage.success('澄清任务已进入队列')
+  await requirementApi.reopenClarification(requirement.value.id, requirement.value.version)
+  ElMessage.success('已返回本轮澄清问题，可重新填写答案')
   await loadAll()
 }
 
@@ -297,6 +329,15 @@ async function submitClarificationAnswers() {
 
 async function confirmClarification() {
   if (!requirement.value) return
+  await ElMessageBox.confirm(
+    '确认后将进入开发文档生成，本次确认不能撤销或回退；后续修改只能通过新一轮澄清生成新版本。确定继续？',
+    '再次确认澄清结果',
+    {
+      type: 'warning',
+      confirmButtonText: '确定，不能回退',
+      cancelButtonText: '返回检查',
+    },
+  )
   await requirementApi.confirmClarification(requirement.value.id, requirement.value.version, {
     title: requirement.value.title,
     description: requirement.value.description,
@@ -315,11 +356,16 @@ async function startTask() {
   if (!requirement.value || taskStarting.value || hasActiveTask.value) return
   taskStarting.value = true
   try {
-    await requirementApi.startTask(
-      requirement.value.id,
-      taskSummaryByStage[requirement.value.stage] || `执行 ${stageLabels[requirement.value.stage]}`,
-    )
-    ElMessage.success(isTestPlanGeneration.value ? '测试方案生成任务已进入队列' : 'Agent 任务已进入队列')
+    if (latestCurrentStageTask.value?.status === 'failed') {
+      await requirementApi.retryTask(latestCurrentStageTask.value.id)
+      ElMessage.success(`已根据任务 #${latestCurrentStageTask.value.id} 的失败信息创建重试任务`)
+    } else {
+      await requirementApi.startTask(
+        requirement.value.id,
+        taskSummaryByStage[requirement.value.stage] || `执行 ${stageLabels[requirement.value.stage]}`,
+      )
+      ElMessage.success(isTestPlanGeneration.value ? '测试方案生成任务已进入队列' : 'Agent 任务已进入队列')
+    }
     await loadAll()
   } finally {
     taskStarting.value = false
@@ -347,11 +393,34 @@ async function retryTask(task: AgentTask) {
   await loadAll()
 }
 
+function stopLogPolling() {
+  window.clearInterval(logPollTimer)
+  logPollTimer = undefined
+}
+
+async function refreshTaskLogs(taskId: number) {
+  const [logResponse, taskResponse] = await Promise.all([
+    requirementApi.taskLogs(taskId),
+    requirementApi.tasks(requirementId.value),
+  ])
+  taskLogs.value = logResponse.data.items
+  const latestTask = taskResponse.data.find((item) => item.id === taskId)
+  if (latestTask) {
+    selectedTask.value = latestTask
+    if (!['queued', 'running'].includes(latestTask.status)) stopLogPolling()
+  }
+}
+
 async function openTaskLogs(task: AgentTask) {
-  const response = await requirementApi.taskLogs(task.id)
   selectedTask.value = task
-  taskLogs.value = response.data.items
   showLogDialog.value = true
+  stopLogPolling()
+  await refreshTaskLogs(task.id)
+  if (['queued', 'running'].includes(selectedTask.value?.status || task.status)) {
+    logPollTimer = window.setInterval(() => {
+      void refreshTaskLogs(task.id)
+    }, 8000)
+  }
 }
 
 async function checkWorkspaceMerge(workspace: RequirementWorkspace) {
@@ -419,12 +488,19 @@ async function submitReview() {
   }
   let finalConfirmation = false
   const isFinalDelivery = currentGate.value.gate === 'final_acceptance' && reviewAction.value === 'approve'
-  if (isFinalDelivery) {
-    await ElMessageBox.confirm('系统将推送全部功能分支；只有全部推送成功后需求才会自动完成。确认人工测试已通过？', '验收通过并提交', {
-      type: 'warning',
-      confirmButtonText: '验收通过并提交',
-    })
-    finalConfirmation = true
+  if (reviewAction.value === 'approve') {
+    await ElMessageBox.confirm(
+      isFinalDelivery
+        ? '系统将推送全部功能分支，提交后不能撤销或回退；只有全部推送成功后需求才会自动完成。确定人工测试已通过？'
+        : '审批通过后将进入下一阶段，本次审批不能撤销或回退。确定继续？',
+      isFinalDelivery ? '再次确认验收并提交' : '再次确认审批通过',
+      {
+        type: 'warning',
+        confirmButtonText: isFinalDelivery ? '确定验收并提交' : '确定通过，不能回退',
+        cancelButtonText: '返回检查',
+      },
+    )
+    finalConfirmation = isFinalDelivery
   }
   const payload: ReviewPayload = {
     action: reviewAction.value,
@@ -496,11 +572,12 @@ onMounted(async () => {
   void requirementApi
     .streamEvents(requirementId.value, () => void loadAll(false), eventController.signal)
     .catch(() => undefined)
-  pollTimer = window.setInterval(() => loadAll(false), 30000)
+  pollTimer = window.setInterval(() => loadAll(false), 8000)
 })
 onUnmounted(() => {
   eventController?.abort()
   window.clearInterval(pollTimer)
+  window.clearInterval(logPollTimer)
 })
 </script>
 
@@ -523,7 +600,7 @@ onUnmounted(() => {
       </div>
       <div class="header-actions">
         <el-button :icon="Refresh" @click="loadAll">刷新</el-button>
-        <el-button v-if="hasAction('edit')" :icon="Edit" @click="openEditDialog">编辑草稿</el-button>
+        <el-button v-if="hasAction('edit')" :icon="Edit" @click="openEditDialog">{{ requirement.stage === 'requirement_clarification' ? '修改需求后重新澄清' : '编辑草稿' }}</el-button>
         <el-button v-if="hasAction('submit')" type="primary" :icon="Check" @click="submitRequirement">提交需求</el-button>
         <el-button v-if="hasAction('pause')" :icon="VideoPause" @click="pauseRequirement">暂停</el-button>
         <el-button v-if="hasAction('resume')" type="primary" :icon="VideoPlay" @click="resumeRequirement">恢复</el-button>
@@ -573,10 +650,12 @@ onUnmounted(() => {
               </div>
               <el-button v-if="latestClarificationRound.status === 'pending_answers' && hasAction('answer_clarification')" type="primary" @click="submitClarificationAnswers">提交本轮答案</el-button>
               <el-button v-else-if="latestClarificationRound.status === 'answered' && hasAction('confirm_clarification')" type="primary" @click="clarificationSummary = requirement.description; showClarificationConfirm = true">确认澄清完成</el-button>
+              <el-button v-else-if="latestClarificationRound.status === 'confirmed' && hasAction('reopen_clarification')" @click="reopenClarification">重新回答本轮问题</el-button>
+              <el-button v-if="latestClarificationRound.status === 'confirmed' && hasAction('generate_clarification')" type="primary" :loading="taskStarting" :disabled="hasActiveTask" @click="generateClarification">根据驳回意见生成新一轮澄清问题</el-button>
             </div>
             <div v-else class="empty-action">
               <el-empty description="尚未生成澄清问题" :image-size="70" />
-              <el-button v-if="hasAction('generate_clarification')" type="primary" @click="generateClarification">生成澄清问题</el-button>
+              <el-button v-if="hasAction('generate_clarification')" type="primary" :loading="taskStarting" :disabled="hasActiveTask" @click="generateClarification">生成澄清问题</el-button>
             </div>
           </div>
         </section>
@@ -710,7 +789,10 @@ onUnmounted(() => {
 
     <el-dialog v-model="showReviseDialog" title="人工修订产物" width="720px"><el-form label-position="top"><el-form-item label="内容"><el-input v-model="reviseContent" type="textarea" :rows="16" /></el-form-item><el-form-item label="修订说明"><el-input v-model="reviseComment" /></el-form-item></el-form><template #footer><el-button @click="showReviseDialog = false">取消</el-button><el-button type="primary" @click="reviseArtifact">保存为新版本</el-button></template></el-dialog>
 
-    <el-dialog v-model="showLogDialog" :title="`任务 #${selectedTask?.id || ''} 日志`" width="760px"><AgentLogViewer :logs="taskLogs.map((item) => `[${formatTime(item.created_at)}] ${item.level.toUpperCase()} ${item.message}`)" :is-running="selectedTask?.status === 'running'" /></el-dialog>
+    <el-dialog v-model="showLogDialog" :title="`任务 #${selectedTask?.id || ''} 日志`" width="760px">
+      <el-alert v-if="taskIsStale" type="warning" :closable="false" show-icon title="超过 2 分钟没有新的 Agent 输出，任务可能已停止响应" />
+      <AgentLogViewer :logs="taskLogs.map((item) => `[${formatTime(item.created_at)}] ${item.level.toUpperCase()} ${item.message}`)" :is-running="selectedTask?.status === 'running'" />
+    </el-dialog>
   </div>
   <el-empty v-else-if="!loading" description="需求不存在" />
 </template>
@@ -727,7 +809,7 @@ onUnmounted(() => {
 .priority-tag { border: 0; }
 .merge-history { min-height: 48px; padding: 12px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border-top: 1px solid #e7eaee; color: #606a77; font-size: 12px; }
 .merge-history strong { color: #303844; }
-.stage-track { min-width: 900px; display: grid; grid-template-columns: repeat(8, minmax(92px, 1fr)); background: #fff; border: 1px solid #dfe3e8; margin-bottom: 18px; overflow: hidden; }
+.stage-track { min-width: 980px; display: grid; grid-template-columns: repeat(9, minmax(92px, 1fr)); background: #fff; border: 1px solid #dfe3e8; margin-bottom: 18px; overflow: hidden; }
 .stage-node { position: relative; min-height: 72px; padding: 12px 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #929aa5; text-align: center; border-right: 1px solid #eceef1; }
 .stage-node:last-child { border-right: 0; }
 .stage-node > span { width: 22px; height: 22px; border-radius: 50%; background: #eef0f3; display: grid; place-items: center; font-size: 11px; }

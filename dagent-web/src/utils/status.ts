@@ -8,6 +8,7 @@ export const stageOrder: StageCode[] = [
   'development',
   'development_report_review',
   'test_plan_generation',
+  'test_plan_review',
   'final_acceptance',
 ]
 
@@ -19,6 +20,7 @@ export const stageLabels: Record<StageCode, string> = {
   development: '开发实现',
   development_report_review: '开发报告审批',
   test_plan_generation: '测试方案生成',
+  test_plan_review: '测试方案审批',
   final_acceptance: '最终验收',
   completed: '已完成',
 }
@@ -45,6 +47,7 @@ export const priorityColors: Record<PriorityCode, string> = {
 export const gateLabels: Record<ReviewGate, string> = {
   development_document: '开发文档',
   development_report: '开发报告',
+  test_plan: '测试方案',
   final_acceptance: '最终验收',
 }
 

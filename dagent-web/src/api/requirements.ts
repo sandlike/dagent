@@ -91,6 +91,11 @@ export const requirementApi = {
       resource_version: resourceVersion,
       requirement_document: requirementDocument,
     }),
+  reopenClarification: (id: number, resourceVersion: number) =>
+    client.post<never, ApiResponse<{ round_id: number; status: string; resource_version: number }>>(
+      `/requirements/${id}/clarification/reopen`,
+      { resource_version: resourceVersion },
+    ),
   artifacts: (id: number) =>
     client.get<never, ApiResponse<ArtifactSummary[]>>(`/requirements/${id}/artifacts`),
   artifactVersions: (id: number, type: string) =>
