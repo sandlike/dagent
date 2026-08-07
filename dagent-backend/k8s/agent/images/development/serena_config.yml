@@ -1,0 +1,16 @@
+language_backend: LSP
+web_dashboard: false
+web_dashboard_open_on_launch: false
+gui_log_window: false
+record_tool_usage_stats: false
+project_serena_folder_location: "/home/opencode/.serena/projects/$projectFolderName/.serena"
+trusted_project_path_patterns:
+  - /workspaces/**
+excluded_tools:
+  - replace_symbol_body
+  - insert_after_symbol
+  - insert_before_symbol
+  - safe_delete
+  - rename_symbol
+  - replace_content
+  - execute_shell_command

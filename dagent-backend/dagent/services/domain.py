@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dagent.api.errors import ConflictError, InvalidStateError, NotFoundError
@@ -28,7 +28,7 @@ from dagent.pipeline.state_machine import PipelineState, RunStatus, next_state, 
 
 TASK_ROLE_TYPES: dict[str, str | None] = {
     "clarification_generate": "requirement_clarification",
-    "development_document_generation": "development",
+    "development_document_generation": "development_document",
     "development": "development",
     "failure_fix": "development",
     "test_plan_generation": "development",
@@ -57,7 +57,11 @@ async def get_requirement(session: AsyncSession, user: User, requirement_id: int
     query = (
         select(Requirement)
         .join(Project, Project.id == Requirement.project_id)
-        .where(Requirement.id == requirement_id, Requirement.tenant_id == user.tenant_id)
+        .where(
+            Requirement.id == requirement_id,
+            Requirement.tenant_id == user.tenant_id,
+            Requirement.deleted_at.is_(None),
+        )
     )
     if "admin" not in user.roles:
         query = query.join(ProjectMember, ProjectMember.project_id == Project.id).where(
@@ -222,9 +226,17 @@ async def create_agent_task(
                 AgentDefinition.tenant_id == requirement.tenant_id,
                 AgentDefinition.role_type == role_type,
                 AgentDefinition.status == "active",
+                or_(
+                    AgentDefinition.owner_user_id.is_(None),
+                    AgentDefinition.owner_user_id == requirement.created_by,
+                ),
                 AgentVersion.status == "published",
             )
-            .order_by(AgentDefinition.default_flag.desc(), AgentVersion.version.desc())
+            .order_by(
+                case((AgentDefinition.owner_user_id == requirement.created_by, 1), else_=0).desc(),
+                AgentDefinition.default_flag.desc(),
+                AgentVersion.version.desc(),
+            )
             .limit(1)
         )
         if agent_version is None:

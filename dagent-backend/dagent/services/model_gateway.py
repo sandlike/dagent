@@ -8,7 +8,7 @@ from typing import cast
 from urllib.parse import urljoin
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dagent.api.errors import InvalidStateError, NotFoundError
@@ -35,7 +35,7 @@ from dagent.models import (
 from dagent.services.credentials import decrypt_model_token
 from dagent.services.redaction import redact_sensitive_text
 
-AGENT_MODEL_TYPES = ("requirement_clarification", "development")
+AGENT_MODEL_TYPES = ("requirement_clarification", "development_document", "development")
 DEFAULT_USER_QUOTA = 50_000
 ALL_MODEL_NODES_QUOTA_EXHAUSTED = "所有模型节点额度不足"
 USER_TOTAL_BUDGET_EXHAUSTED = "用户总预算不足"
@@ -215,6 +215,8 @@ async def probe_model_route(route: ModelRoute) -> ModelRouteTestResult:
 def agent_scope_for_task(task_type: str) -> str:
     if task_type == "clarification_generate":
         return "requirement_clarification"
+    if task_type == "development_document_generation":
+        return "development_document"
     return "development"
 
 
@@ -253,7 +255,11 @@ async def ensure_user_model_profile(
         (
             await session.scalars(
                 select(ModelRoute)
-                .where(ModelRoute.tenant_id == tenant_id, ModelRoute.status == "active")
+                .where(
+                    ModelRoute.tenant_id == tenant_id,
+                    ModelRoute.status == "active",
+                    or_(ModelRoute.owner_user_id.is_(None), ModelRoute.owner_user_id == user_id),
+                )
                 .order_by(ModelRoute.priority, ModelRoute.id)
             )
         ).all()

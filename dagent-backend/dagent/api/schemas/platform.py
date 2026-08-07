@@ -56,7 +56,7 @@ class MergeQueueRead(ORMModel):
     updated_at: datetime
 
 
-AgentRoleType = Literal["requirement_clarification", "development"]
+AgentRoleType = Literal["requirement_clarification", "development_document", "development"]
 
 
 class AgentDefinitionCreate(BaseModel):
@@ -97,6 +97,8 @@ class AgentVersionRead(ORMModel):
 
 class AgentDefinitionRead(ORMModel):
     id: int
+    owner_user_id: int | None
+    can_manage: bool = False
     role_type: str
     name: str
     status: str

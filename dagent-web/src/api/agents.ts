@@ -2,7 +2,7 @@ import client from './client'
 import type { AgentDefinition, AgentVersion, ApiResponse } from './types'
 
 export interface AgentDefinitionCreate {
-  role_type: 'requirement_clarification' | 'development'
+  role_type: 'requirement_clarification' | 'development_document' | 'development'
   name: string
   default_flag: boolean
 }

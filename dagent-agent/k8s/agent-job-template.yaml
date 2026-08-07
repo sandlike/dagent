@@ -1,0 +1,78 @@
+# Reference template for the per-requirement agent Job.
+#
+# This file is for human reference and manual debugging only. The backend
+# constructs the Job body in code at runtime (see
+# dagent-backend/dagent/services/agent_orchestrator.py _build_job_body) because
+# the requirement-id and image are dynamic. Keep the two in sync when changing
+# resource limits, volumes, or security context.
+#
+# Apply manually for a one-off test (replace <ID> with a real requirement id):
+#   sed 's/<ID>/42/' k8s/agent-job-template.yaml | kubectl apply -f -
+#
+# Prerequisite Secrets (create once, see dagent-backend/k8s/README.md):
+#   dagent-agent-secrets  — DAGENT_BACKEND_API_BASE_URL, DAGENT_AGENT_CALLBACK_TOKEN,
+#                           DAGENT_LLM_API_BASE_URL, DAGENT_LLM_API_KEY, DAGENT_LLM_MODEL
+#   dagent-agent-ssh      — id_rsa (private key), config, known_hosts for git clone
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dagent-agent-<ID>
+  namespace: dagent
+  labels:
+    app.kubernetes.io/name: dagent-agent
+    app.kubernetes.io/part-of: dagent
+    dagent/requirement-id: "<ID>"
+spec:
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 3600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dagent-agent
+        app.kubernetes.io/part-of: dagent
+        dagent/requirement-id: "<ID>"
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: acr-auth
+      containers:
+        - name: agent
+          image: registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-agent:0.1.0
+          imagePullPolicy: Always
+          args:
+            - --requirement-id
+            - "<ID>"
+          envFrom:
+            - secretRef:
+                name: dagent-agent-secrets
+          env:
+            - name: DAGENT_CODEBASE_WORK_DIR
+              value: /work/codebases
+          volumeMounts:
+            - name: codebase
+              mountPath: /work/codebases
+            - name: ssh
+              mountPath: /home/dagent/.ssh
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            runAsUser: 10001
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: codebase
+          emptyDir: {}
+        - name: ssh
+          secret:
+            name: dagent-agent-ssh
+            defaultMode: 0600

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "bigmodel/glm-4.7-flash",
+  "small_model": "bigmodel/glm-4.7-flash",
+  "provider": {
+    "bigmodel": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Dagent model gateway",
+      "options": {
+        "baseURL": "http://dagent-backend:8000/api/v1/model-proxy/v1",
+        "timeout": 300000,
+        "apiKey": "{env:AGENT_CALLBACK_TOKEN}"
+      },
+      "models": { "glm-4.7-flash": { "name": "Dagent routed model" } }
+    }
+  },
+  "mcp": {
+    "serena": {
+      "type": "local",
+      "command": ["serena", "start-mcp-server", "--context", "ide", "--project-from-cwd"],
+      "enabled": true,
+      "timeout": 30000
+    }
+  },
+  "tools": {
+    "serena__replace_symbol_body": false,
+    "serena__insert_after_symbol": false,
+    "serena__insert_before_symbol": false,
+    "serena__safe_delete": false,
+    "serena__rename_symbol": false,
+    "serena__replace_content": false,
+    "serena__execute_shell_command": false
+  },
+  "agent": {
+    "development": {
+      "description": "Requirement-scoped code development Agent",
+      "mode": "primary",
+      "model": "bigmodel/glm-4.7-flash",
+      "steps": 24,
+      "prompt": "Load and follow the development skill. Work only inside the current requirement workspace. Follow the approved document and backend task mode, make the smallest coherent change, and run focused checks. Never create child agents, expose secrets, push, merge, reset, or access another requirement workspace. Return exactly the backend-requested JSON contract.",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "grep": "allow",
+        "glob": "allow",
+        "list": "allow",
+        "skill": "allow",
+        "question": "deny",
+        "external_directory": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "bash": {
+          "*": "allow",
+          "git reset*": "deny",
+          "git push*": "deny",
+          "git merge*": "deny",
+          "rm -rf *": "deny"
+        }
+      }
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "list": "allow",
+    "skill": "allow",
+    "question": "deny",
+    "external_directory": "deny",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "bash": {
+      "*": "allow",
+      "git reset*": "deny",
+      "git push*": "deny",
+      "git merge*": "deny",
+      "rm -rf *": "deny"
+    }
+  }
+}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from dagent.api.deps import CurrentUser, SessionDep, TraceId, require_roles
 from dagent.api.errors import ConflictError, InvalidStateError, NotFoundError
@@ -146,6 +146,7 @@ async def update_my_agent_model_binding(
                 ModelRoute.id.in_(requested_route_ids),
                 ModelRoute.tenant_id == user.tenant_id,
                 ModelRoute.status == "active",
+                or_(ModelRoute.owner_user_id.is_(None), ModelRoute.owner_user_id == user.id),
             )
         )
     ).all()

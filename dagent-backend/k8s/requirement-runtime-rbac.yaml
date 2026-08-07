@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dagent-backend
+  namespace: dagent
+  labels:
+    app.kubernetes.io/name: dagent-backend
+    app.kubernetes.io/part-of: dagent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dagent-backend-requirement-runtimes
+  namespace: dagent
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dagent-backend-requirement-runtimes
+  namespace: dagent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dagent-backend-requirement-runtimes
+subjects:
+  - kind: ServiceAccount
+    name: dagent-backend
+    namespace: dagent

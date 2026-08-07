@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dagent-requirement-runtime-ingress
+  namespace: dagent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dagent-requirement-runtime
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dagent-backend
+      ports:
+        - protocol: TCP
+          port: 4096
+        - protocol: TCP
+          port: 4097
+        - protocol: TCP
+          port: 4098
+        - protocol: TCP
+          port: 8090

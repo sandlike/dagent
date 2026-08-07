@@ -31,6 +31,7 @@ from dagent.models import (
     ProjectModelRoute,
     Requirement,
     User,
+    UserAgentModelBinding,
 )
 from dagent.services.audit import add_audit_log
 from dagent.services.credentials import encrypt_model_token
@@ -47,10 +48,27 @@ admin_user = Depends(require_roles("admin"))
 agent_callback = Depends(verify_agent_callback_token)
 
 
-async def _route_or_404(session: SessionDep, tenant_id: int, route_id: int) -> ModelRoute:
-    route = await session.scalar(
-        select(ModelRoute).where(ModelRoute.id == route_id, ModelRoute.tenant_id == tenant_id)
+def _is_admin(user: User) -> bool:
+    return "admin" in user.roles
+
+
+def _route_read(route: ModelRoute, user: User) -> ModelRouteRead:
+    return ModelRouteRead.model_validate(route).model_copy(
+        update={"can_manage": _is_admin(user) or route.owner_user_id == user.id}
     )
+
+
+async def _route_or_404(
+    session: SessionDep,
+    user: User,
+    route_id: int,
+    *,
+    require_manage: bool = False,
+) -> ModelRoute:
+    query = select(ModelRoute).where(ModelRoute.id == route_id, ModelRoute.tenant_id == user.tenant_id)
+    if require_manage and not _is_admin(user):
+        query = query.where(ModelRoute.owner_user_id == user.id)
+    route = await session.scalar(query)
     if route is None:
         raise NotFoundError("Model route does not exist")
     return route
@@ -59,13 +77,15 @@ async def _route_or_404(session: SessionDep, tenant_id: int, route_id: int) -> M
 @router.get("/model-routes", response_model=ApiResponse[Page[ModelRouteRead]])
 async def list_model_routes(
     session: SessionDep,
-    user: User = admin_user,
+    user: CurrentUser,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     status: str | None = None,
     provider: str | None = None,
 ) -> ApiResponse[Page[ModelRouteRead]]:
     filters = [ModelRoute.tenant_id == user.tenant_id]
+    if not _is_admin(user):
+        filters.append(ModelRoute.owner_user_id == user.id)
     if status:
         filters.append(ModelRoute.status == status)
     if provider:
@@ -84,7 +104,7 @@ async def list_model_routes(
     )
     return ApiResponse(
         data=Page(
-            items=[ModelRouteRead.model_validate(route) for route in routes],
+            items=[_route_read(route, user) for route in routes],
             total=total,
             page=page,
             page_size=page_size,
@@ -97,14 +117,18 @@ async def create_model_route(
     payload: ModelRouteCreate,
     session: SessionDep,
     trace_id: TraceId,
-    user: User = admin_user,
+    user: CurrentUser,
 ) -> ApiResponse[ModelRouteRead]:
     values = payload.model_dump(exclude={"api_token"})
     values["base_url"] = str(payload.base_url).rstrip("/")
     if payload.api_token is not None:
         values["credential_ciphertext"] = encrypt_model_token(payload.api_token.get_secret_value())
         values["credential_ref"] = None
-    route = ModelRoute(tenant_id=user.tenant_id, **values)
+    route = ModelRoute(
+        tenant_id=user.tenant_id,
+        owner_user_id=None if _is_admin(user) else user.id,
+        **values,
+    )
     session.add(route)
     try:
         await session.flush()
@@ -123,15 +147,15 @@ async def create_model_route(
     )
     await session.commit()
     await session.refresh(route)
-    return ApiResponse(data=ModelRouteRead.model_validate(route))
+    return ApiResponse(data=_route_read(route, user))
 
 
 @router.get("/model-routes/{route_id}", response_model=ApiResponse[ModelRouteRead])
 async def model_route_detail(
-    route_id: int, session: SessionDep, user: User = admin_user
+    route_id: int, session: SessionDep, user: CurrentUser
 ) -> ApiResponse[ModelRouteRead]:
-    route = await _route_or_404(session, user.tenant_id, route_id)
-    return ApiResponse(data=ModelRouteRead.model_validate(route))
+    route = await _route_or_404(session, user, route_id, require_manage=True)
+    return ApiResponse(data=_route_read(route, user))
 
 
 @router.patch("/model-routes/{route_id}", response_model=ApiResponse[ModelRouteRead])
@@ -140,9 +164,9 @@ async def update_model_route(
     payload: ModelRouteUpdate,
     session: SessionDep,
     trace_id: TraceId,
-    user: User = admin_user,
+    user: CurrentUser,
 ) -> ApiResponse[ModelRouteRead]:
-    route = await _route_or_404(session, user.tenant_id, route_id)
+    route = await _route_or_404(session, user, route_id, require_manage=True)
     if route.version != payload.resource_version:
         raise ConflictError("Model route resource version is stale")
     changes = payload.model_dump(exclude_unset=True, exclude={"resource_version", "api_token"})
@@ -189,7 +213,7 @@ async def update_model_route(
         await session.rollback()
         raise ConflictError("A model route with this name already exists") from exc
     await session.refresh(route)
-    return ApiResponse(data=ModelRouteRead.model_validate(route))
+    return ApiResponse(data=_route_read(route, user))
 
 
 @router.post("/model-routes/{route_id}/test", response_model=ApiResponse[ModelRouteTestResult])
@@ -197,9 +221,9 @@ async def test_model_route(
     route_id: int,
     session: SessionDep,
     trace_id: TraceId,
-    user: User = admin_user,
+    user: CurrentUser,
 ) -> ApiResponse[ModelRouteTestResult]:
-    route = await _route_or_404(session, user.tenant_id, route_id)
+    route = await _route_or_404(session, user, route_id, require_manage=True)
     result = await probe_model_route(route)
     route.health_status = result.health_status
     if result.detected_api_protocol is not None:
@@ -226,11 +250,28 @@ async def _set_route_status(
     trace_id: str,
     user: User,
 ) -> ApiResponse[ModelRouteRead]:
-    route = await _route_or_404(session, user.tenant_id, route_id)
+    route = await _route_or_404(session, user, route_id, require_manage=True)
     if target_status == "active" and route.health_status != "healthy":
         raise InvalidStateError("Test the model route successfully before enabling it")
     route.status = target_status
     route.version += 1
+    if target_status == "active" and route.owner_user_id is not None:
+        bindings = list(
+            (
+                await session.scalars(
+                    select(UserAgentModelBinding).where(
+                        UserAgentModelBinding.tenant_id == route.tenant_id,
+                        UserAgentModelBinding.user_id == route.owner_user_id,
+                    )
+                )
+            ).all()
+        )
+        for binding in bindings:
+            if route.agent_types and binding.agent_type not in route.agent_types:
+                continue
+            if route.id not in binding.route_ids:
+                binding.route_ids = [*binding.route_ids, route.id]
+                binding.version += 1
     add_audit_log(
         session,
         tenant_id=user.tenant_id,
@@ -242,7 +283,7 @@ async def _set_route_status(
     )
     await session.commit()
     await session.refresh(route)
-    return ApiResponse(data=ModelRouteRead.model_validate(route))
+    return ApiResponse(data=_route_read(route, user))
 
 
 @router.post("/model-routes/{route_id}/enable", response_model=ApiResponse[ModelRouteRead])
@@ -250,7 +291,7 @@ async def enable_model_route(
     route_id: int,
     session: SessionDep,
     trace_id: TraceId,
-    user: User = admin_user,
+    user: CurrentUser,
 ) -> ApiResponse[ModelRouteRead]:
     return await _set_route_status(route_id, "active", session, trace_id, user)
 
@@ -260,7 +301,7 @@ async def disable_model_route(
     route_id: int,
     session: SessionDep,
     trace_id: TraceId,
-    user: User = admin_user,
+    user: CurrentUser,
 ) -> ApiResponse[ModelRouteRead]:
     return await _set_route_status(route_id, "disabled", session, trace_id, user)
 
@@ -270,9 +311,9 @@ async def reset_model_route_quota(
     route_id: int,
     session: SessionDep,
     trace_id: TraceId,
-    user: User = admin_user,
+    user: CurrentUser,
 ) -> ApiResponse[ModelRouteRead]:
-    route = await _route_or_404(session, user.tenant_id, route_id)
+    route = await _route_or_404(session, user, route_id, require_manage=True)
     if route.quota_reserved:
         raise InvalidStateError("Cannot reset quota while model calls have reserved tokens")
     route.quota_used = 0
@@ -288,7 +329,7 @@ async def reset_model_route_quota(
     )
     await session.commit()
     await session.refresh(route)
-    return ApiResponse(data=ModelRouteRead.model_validate(route))
+    return ApiResponse(data=_route_read(route, user))
 
 
 @router.get("/model-usage", response_model=ApiResponse[list[ModelUsageItem]])
@@ -447,7 +488,7 @@ async def update_project_model_route(
         raise ConflictError("Project model route resource version is stale")
     route = None
     if payload.route_id is not None:
-        route = await _route_or_404(session, user.tenant_id, payload.route_id)
+        route = await _route_or_404(session, user, payload.route_id)
         if route.status != "active":
             raise InvalidStateError("Only an active model route can be assigned to a project")
     if binding is None:

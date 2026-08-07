@@ -27,7 +27,9 @@ const form = reactive({
   priority: 'P2' as PriorityCode,
   repository_ids: [] as number[],
   requirement_agent_version_id: undefined as number | undefined,
+  development_document_agent_version_id: undefined as number | undefined,
   development_agent_version_id: undefined as number | undefined,
+  workspace_retention_policy: 'retain' as 'retain' | 'delete',
 })
 
 const canCreate = computed(() => authStore.user?.roles.some((role) => ['admin', 'pm'].includes(role)))
@@ -39,6 +41,9 @@ const requirementAgentVersions = computed(() =>
 )
 const developmentAgentVersions = computed(() =>
   agents.value.filter((item) => item.role_type === 'development').flatMap((item) => item.versions.map((version) => ({ ...version, name: item.name }))),
+)
+const developmentDocumentAgentVersions = computed(() =>
+  agents.value.filter((item) => item.role_type === 'development_document').flatMap((item) => item.versions.map((version) => ({ ...version, name: item.name }))),
 )
 async function fetchList() {
   await store.fetchList({
@@ -74,7 +79,9 @@ async function handleCreate() {
       priority: form.priority,
       repository_ids: form.repository_ids,
       requirement_agent_version_id: form.requirement_agent_version_id,
+      development_document_agent_version_id: form.development_document_agent_version_id,
       development_agent_version_id: form.development_agent_version_id,
+      workspace_retention_policy: form.workspace_retention_policy,
     })
     ElMessage.success('需求草稿已创建')
     showCreateDialog.value = false
@@ -187,12 +194,20 @@ onMounted(async () => {
               <el-option v-for="version in requirementAgentVersions" :key="version.id" :label="`${version.name} / ${version.style} v${version.version}`" :value="version.id" />
             </el-select>
           </el-form-item>
+          <el-form-item label="开发文档 Agent">
+            <el-select v-model="form.development_document_agent_version_id" clearable style="width: 100%" placeholder="使用项目默认配置">
+              <el-option v-for="version in developmentDocumentAgentVersions" :key="version.id" :label="`${version.name} / ${version.style} v${version.version}`" :value="version.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="开发 Agent">
             <el-select v-model="form.development_agent_version_id" clearable style="width: 100%" placeholder="使用项目默认配置">
               <el-option v-for="version in developmentAgentVersions" :key="version.id" :label="`${version.name} / ${version.style} v${version.version}`" :value="version.id" />
             </el-select>
           </el-form-item>
         </div>
+        <el-form-item label="需求完成或删除后的 Workspace">
+          <el-segmented v-model="form.workspace_retention_policy" :options="[{ label: '保留', value: 'retain' }, { label: '删除', value: 'delete' }]" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>

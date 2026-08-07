@@ -5,11 +5,12 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - mysql-rds.yaml
+  - requirement-runtime-rbac.yaml
+  - requirement-runtime-network-policy.yaml
+  - repository-verifier.yaml
   - backend.yaml
   - frontend.yaml
   - frontend-tunnel.yaml
-  - agent/requirement-agent.yaml
-  - agent/development-agent.yaml
 configMapGenerator:
   - name: dagent-frontend-nginx
     files:
@@ -18,13 +19,7 @@ configMapGenerator:
     files:
       - workspace-manager.mjs=agent/workspace-manager.mjs
       - git-askpass.sh=agent/git-askpass.sh
-  - name: dagent-agent-skills
-    files:
-      - grill-me-SKILL.md=agent/skills/grill-me/SKILL.md
-      - dev-plan-SKILL.md=agent/skills/dev-plan/SKILL.md
-  - name: dagent-serena-config
-    files:
-      - serena_config.yml=agent/serena_config.yml
+      - derive-runtime-auth.mjs=agent/derive-runtime-auth.mjs
 generatorOptions:
   disableNameSuffixHash: true
 images:

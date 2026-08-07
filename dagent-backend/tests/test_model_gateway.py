@@ -26,7 +26,7 @@ def test_only_provider_failures_are_eligible_for_automatic_fallback():
     assert _fallback_error(422) is None
 
 
-async def test_admin_can_add_a_new_model_with_an_encrypted_api_token(client: AsyncClient, users):
+async def test_users_can_add_personal_models_with_encrypted_tokens(client: AsyncClient, users, monkeypatch):
     raw_token = "test-model-token-not-for-storage"
     created = payload(
         await client.post(
@@ -55,20 +55,75 @@ async def test_admin_can_add_a_new_model_with_an_encrypted_api_token(client: Asy
         assert route.credential_ciphertext != raw_token
         assert decrypt_model_token(route.credential_ciphertext) == raw_token
 
-    denied = await client.post(
-        "/api/v1/model-routes",
-        json={
-            "name": "developer-created-model",
-            "provider": "openai-compatible",
-            "model": "new-model",
-            "base_url": "http://localhost:8000/v1",
-            "priority": 21,
-            "quota_limit": 50000,
-            "api_token": raw_token,
-        },
-        headers=users["developer"]["headers"],
+    async def healthy_probe(_route):
+        return ModelRouteTestResult(
+            ok=True,
+            latency_ms=12,
+            health_status="healthy",
+            detected_api_protocol="responses",
+            message="ok",
+        )
+
+    monkeypatch.setattr("dagent.api.v1.model_gateway.probe_model_route", healthy_probe)
+    personal = payload(
+        await client.post(
+            "/api/v1/model-routes",
+            json={
+                "name": "developer-created-model",
+                "provider": "openai-compatible",
+                "model": "new-model",
+                "base_url": "http://localhost:8000/v1",
+                "api_protocol": "responses",
+                "priority": 21,
+                "quota_limit": 50000,
+                "api_token": raw_token,
+            },
+            headers=users["developer"]["headers"],
+        )
     )
-    assert denied.status_code == 403
+    assert personal["owner_user_id"] == users["developer"]["id"]
+    assert personal["can_manage"] is True
+    assert personal["api_protocol"] == "responses"
+
+    developer_routes = payload(
+        await client.get("/api/v1/model-routes", headers=users["developer"]["headers"])
+    )["items"]
+    assert {item["id"] for item in developer_routes} == {personal["id"]}
+    assert personal["id"] not in {
+        item["id"]
+        for item in payload(await client.get("/api/v1/model-routes", headers=users["pm"]["headers"]))[
+            "items"
+        ]
+    }
+    cross_user_update = await client.patch(
+        f"/api/v1/model-routes/{personal['id']}",
+        json={"name": "not-allowed", "resource_version": personal["version"]},
+        headers=users["pm"]["headers"],
+    )
+    assert cross_user_update.status_code == 404
+
+    payload(
+        await client.post(
+            f"/api/v1/model-routes/{personal['id']}/test",
+            headers=users["developer"]["headers"],
+        )
+    )
+    payload(
+        await client.post(
+            f"/api/v1/model-routes/{personal['id']}/enable",
+            headers=users["developer"]["headers"],
+        )
+    )
+    developer_gateway = payload(
+        await client.get("/api/v1/me/model-gateway", headers=users["developer"]["headers"])
+    )
+    assert personal["id"] in {item["id"] for item in developer_gateway["routes"]}
+    payload(
+        await client.post(
+            f"/api/v1/model-routes/{personal['id']}/disable",
+            headers=users["developer"]["headers"],
+        )
+    )
 
 
 async def test_model_route_probe_accepts_a_configured_public_host(monkeypatch):
@@ -250,6 +305,70 @@ async def test_model_route_probe_auto_detects_responses_api(monkeypatch):
     ]
 
 
+async def test_model_route_probe_uses_the_configured_responses_protocol(monkeypatch):
+    requested_urls: list[str] = []
+    request_payloads: list[dict] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "id": "resp_test",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "OK"}],
+                    }
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+        async def post(self, url, **kwargs):
+            requested_urls.append(url)
+            request_payloads.append(kwargs["json"])
+            return FakeResponse()
+
+    monkeypatch.setattr("dagent.services.model_gateway.httpx.AsyncClient", FakeClient)
+    result = await probe_model_route(
+        ModelRoute(
+            base_url="https://example.com/v1",
+            model="test-model",
+            api_protocol="responses",
+            timeout_ms=1_000,
+            credential_ref=None,
+            credential_ciphertext=None,
+        )
+    )
+
+    assert result.ok is True
+    assert result.detected_api_protocol == "responses"
+    assert requested_urls == ["https://example.com/v1/responses"]
+    assert request_payloads == [
+        {
+            "model": "test-model",
+            "input": "Reply with exactly: OK",
+            "max_output_tokens": 256,
+            "stream": False,
+        }
+    ]
+
+
 def test_responses_request_and_result_are_translated_to_chat_contract():
     request = _responses_request(
         {
@@ -381,8 +500,27 @@ async def test_model_gateway_reserves_falls_back_settles_and_audits(
     primary = await create_active_route("gateway-test-primary", 2)
     secondary = await create_active_route("gateway-test-secondary", 3)
 
-    denied = await client.get("/api/v1/model-routes", headers=users["developer"]["headers"])
-    assert denied.status_code == 403
+    developer_gateway = payload(
+        await client.get("/api/v1/me/model-gateway", headers=users["developer"]["headers"])
+    )
+    development_binding = next(
+        item for item in developer_gateway["bindings"] if item["agent_type"] == "development"
+    )
+    payload(
+        await client.put(
+            "/api/v1/me/agent-model-bindings/development",
+            json={
+                "route_ids": [primary["id"], secondary["id"]],
+                "resource_version": development_binding["resource_version"],
+            },
+            headers=users["developer"]["headers"],
+        )
+    )
+
+    personal_routes = payload(
+        await client.get("/api/v1/model-routes", headers=users["developer"]["headers"])
+    )["items"]
+    assert all(item["owner_user_id"] == users["developer"]["id"] for item in personal_routes)
 
     project = payload(
         await client.post(
@@ -608,6 +746,7 @@ async def test_platform_model_bindings_share_route_quota_and_user_budgets(client
     }
     assert {item["agent_type"] for item in developer_gateway["bindings"]} == {
         "requirement_clarification",
+        "development_document",
         "development",
     }
     assert "base_url" not in developer_gateway["routes"][0]
@@ -630,7 +769,7 @@ async def test_platform_model_bindings_share_route_quota_and_user_budgets(client
         headers=developer_headers,
     )
     assert duplicate_priority.status_code == 422
-    for agent_type in ("requirement_clarification", "development"):
+    for agent_type in ("requirement_clarification", "development_document", "development"):
         updated = payload(
             await client.put(
                 f"/api/v1/me/agent-model-bindings/{agent_type}",

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process"
 
 const root = path.resolve(process.env.WORKSPACE_ROOT || "/workspaces")
 const port = Number(process.env.WORKSPACE_MANAGER_PORT || 8090)
-const token = process.env.AGENT_CALLBACK_TOKEN || ""
+const token = process.env.WORKSPACE_MANAGER_TOKEN || process.env.AGENT_CALLBACK_TOKEN || ""
 const askpass = "/opt/dagent/git-askpass.sh"
 
 function json(response, status, body) {

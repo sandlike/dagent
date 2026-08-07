@@ -9,8 +9,9 @@ The class provides:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-import time
 import traceback
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -75,6 +76,40 @@ class AgentResult(BaseModel):
         return cls(status=AgentResultStatus.NEEDS_HUMAN, error_message=error_message, **kwargs)
 
 
+def resolve_answer_text(raw: Any, options: list[dict] | None = None) -> str:
+    """Resolve a clarification answer value to a human/LLM-readable string.
+
+    The clarification ``answer`` column is JSON: a single-choice answer is the
+    option id (e.g. ``"a"``) but may arrive JSON-encoded as ``'"a"'``; a
+    multiple-choice answer arrives as a JSON array string or a real list; a
+    free-text answer is a plain string. We decode the value and, for any item
+    matching an option id, expand it to ``"id: label — description"`` so
+    downstream agents and readers see the actual decision rather than a bare
+    letter. Unmatched items (free text / custom input) pass through unchanged.
+    """
+    options = options or []
+    opts = {str(o.get("id")): o for o in options if isinstance(o, dict)}
+    value: Any = raw
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        try:
+            value = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            value = stripped
+    items = value if isinstance(value, list) else [value]
+    out: list[str] = []
+    for it in items:
+        key = str(it)
+        opt = opts.get(key)
+        if opt:
+            label = opt.get("label") or key
+            desc = opt.get("description") or ""
+            out.append(f"{key}: {label}" + (f" — {desc}" if desc else ""))
+        else:
+            out.append(key)
+    return ", ".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
@@ -137,7 +172,7 @@ class BaseAgent(ABC):
                 )
                 if attempt < self._max_retries:
                     backoff = 2 ** (attempt - 1)  # 1s, 2s, 4s ...
-                    time.sleep(backoff)
+                    await asyncio.sleep(backoff)
 
         # All retries exhausted
         return AgentResult.failure(

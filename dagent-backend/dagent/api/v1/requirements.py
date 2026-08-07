@@ -5,7 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, update
 from sse_starlette.sse import EventSourceResponse
 
 from dagent.api.deps import CurrentUser, SessionDep, TraceId, require_roles
@@ -65,6 +65,33 @@ from dagent.services.domain import (
 from dagent.services.workspaces import push_requirement_workspaces
 
 router = APIRouter()
+
+
+async def _ensure_requirement_runtime(request: Request, requirement: Requirement) -> None:
+    orchestrator = getattr(request.app.state, "requirement_runtime", None)
+    if orchestrator is None:
+        return
+    try:
+        await orchestrator.ensure_requirement(requirement.id, requirement.tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        raise ExternalDependencyError(
+            f"Requirement was saved but its Agent Pod could not be created: {exc}"
+        ) from exc
+
+
+async def _remove_requirement_runtime(request: Request, requirement: Requirement) -> None:
+    orchestrator = getattr(request.app.state, "requirement_runtime", None)
+    if orchestrator is None:
+        return
+    try:
+        await orchestrator.remove_requirement(
+            requirement.id,
+            delete_workspace=(requirement.workspace_retention_policy == "delete"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ExternalDependencyError(
+            f"Requirement state was saved but its Agent Pod could not be removed: {exc}"
+        ) from exc
 
 GATE_CONFIG: dict[str, dict[str, Any]] = {
     "development_document": {
@@ -170,23 +197,28 @@ async def _validate_repository_scope(session: SessionDep, project_id: int, repos
 
 async def _validate_agent_version(
     session: SessionDep,
-    tenant_id: int,
+    user: User,
     agent_version_id: int | None,
     expected_role: str,
 ) -> None:
     if agent_version_id is None:
         return
-    version = await session.scalar(
+    query = (
         select(AgentVersion)
         .join(AgentDefinition)
         .where(
             AgentVersion.id == agent_version_id,
             AgentVersion.status == "published",
-            AgentDefinition.tenant_id == tenant_id,
+            AgentDefinition.tenant_id == user.tenant_id,
             AgentDefinition.role_type == expected_role,
             AgentDefinition.status == "active",
         )
     )
+    if "admin" not in user.roles:
+        query = query.where(
+            or_(AgentDefinition.owner_user_id.is_(None), AgentDefinition.owner_user_id == user.id)
+        )
+    version = await session.scalar(query)
     if version is None:
         raise ConflictError(f"Agent version {agent_version_id} is not a published {expected_role} agent")
 
@@ -201,8 +233,14 @@ async def list_requirements(
     stage: str | None = None,
     priority: str | None = Query(default=None, pattern="^P[0-3]$"),
 ) -> ApiResponse[Page[RequirementRead]]:
-    query = select(Requirement).where(Requirement.tenant_id == user.tenant_id)
-    count_query = select(func.count(Requirement.id)).where(Requirement.tenant_id == user.tenant_id)
+    query = select(Requirement).where(
+        Requirement.tenant_id == user.tenant_id,
+        Requirement.deleted_at.is_(None),
+    )
+    count_query = select(func.count(Requirement.id)).where(
+        Requirement.tenant_id == user.tenant_id,
+        Requirement.deleted_at.is_(None),
+    )
     if "admin" not in user.roles:
         query = query.join(ProjectMember, ProjectMember.project_id == Requirement.project_id).where(
             ProjectMember.user_id == user.id
@@ -240,6 +278,7 @@ async def list_requirements(
 @router.post("", response_model=ApiResponse[RequirementRead], status_code=201)
 async def create_requirement(
     payload: RequirementCreate,
+    request: Request,
     session: SessionDep,
     trace_id: TraceId,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -249,6 +288,8 @@ async def create_requirement(
     if scoped_key:
         existing = await session.scalar(select(Requirement).where(Requirement.create_idempotency_key == scoped_key))
         if existing is not None:
+            if existing.deleted_at is None:
+                await _ensure_requirement_runtime(request, existing)
             return ApiResponse(data=await _requirement_read(session, existing))
     project = await get_project(session, user, payload.project_id)
     if project.status != "active":
@@ -257,11 +298,17 @@ async def create_requirement(
     await _validate_repository_scope(session, project.id, repository_ids)
     await _validate_agent_version(
         session,
-        user.tenant_id,
+        user,
         payload.requirement_agent_version_id,
         "requirement_clarification",
     )
-    await _validate_agent_version(session, user.tenant_id, payload.development_agent_version_id, "development")
+    await _validate_agent_version(
+        session,
+        user,
+        payload.development_document_agent_version_id,
+        "development_document",
+    )
+    await _validate_agent_version(session, user, payload.development_agent_version_id, "development")
     requirement = Requirement(
         tenant_id=user.tenant_id,
         project_id=project.id,
@@ -270,7 +317,9 @@ async def create_requirement(
         priority=payload.priority,
         created_by=user.id,
         requirement_agent_version_id=payload.requirement_agent_version_id,
+        development_document_agent_version_id=payload.development_document_agent_version_id,
         development_agent_version_id=payload.development_agent_version_id,
+        workspace_retention_policy=payload.workspace_retention_policy,
         create_idempotency_key=scoped_key,
     )
     session.add(requirement)
@@ -300,6 +349,7 @@ async def create_requirement(
     )
     await session.commit()
     await session.refresh(requirement)
+    await _ensure_requirement_runtime(request, requirement)
     return ApiResponse(data=await _requirement_read(session, requirement))
 
 
@@ -343,12 +393,19 @@ async def update_requirement(
     if payload.requirement_agent_version_id is not None:
         await _validate_agent_version(
             session,
-            user.tenant_id,
+            user,
             payload.requirement_agent_version_id,
             "requirement_clarification",
         )
+    if payload.development_document_agent_version_id is not None:
+        await _validate_agent_version(
+            session,
+            user,
+            payload.development_document_agent_version_id,
+            "development_document",
+        )
     if payload.development_agent_version_id is not None:
-        await _validate_agent_version(session, user.tenant_id, payload.development_agent_version_id, "development")
+        await _validate_agent_version(session, user, payload.development_agent_version_id, "development")
     changes = payload.model_dump(
         exclude_unset=True,
         exclude={"repository_ids", "resource_version"},
@@ -487,6 +544,7 @@ async def resume_requirement(
 async def cancel_requirement(
     requirement_id: int,
     payload: CancelRequest,
+    request: Request,
     session: SessionDep,
     trace_id: TraceId,
     user: User = Depends(require_roles("pm", "developer")),
@@ -503,6 +561,27 @@ async def cancel_requirement(
     pipeline = await session.scalar(select(Pipeline).where(Pipeline.requirement_id == requirement.id))
     if pipeline:
         pipeline.run_status = RunStatus.CANCELLED.value
+    now = datetime.now(UTC)
+    await session.execute(
+        update(AgentTask)
+        .where(
+            AgentTask.requirement_id == requirement.id,
+            AgentTask.status.in_(("queued", "running")),
+        )
+        .values(
+            status="cancelled",
+            completed_at=now,
+            error_message="Requirement cancelled by user",
+        )
+    )
+    await session.execute(
+        update(AgentSession)
+        .where(
+            AgentSession.requirement_id == requirement.id,
+            AgentSession.status == "active",
+        )
+        .values(status="requirement_cancelled")
+    )
     add_audit_log(
         session,
         tenant_id=user.tenant_id,
@@ -515,7 +594,68 @@ async def cancel_requirement(
     )
     await session.commit()
     await session.refresh(requirement)
+    await _remove_requirement_runtime(request, requirement)
     return ApiResponse(data=await _requirement_read(session, requirement))
+
+
+@router.delete("/{requirement_id}", response_model=ApiResponse[dict[str, Any]])
+async def delete_requirement(
+    requirement_id: int,
+    request: Request,
+    session: SessionDep,
+    trace_id: TraceId,
+    resource_version: int = Query(ge=1),
+    user: User = Depends(require_roles("pm")),
+) -> ApiResponse[dict[str, Any]]:
+    requirement = await get_requirement(session, user, requirement_id)
+    _require_version(requirement, resource_version)
+    now = datetime.now(UTC)
+    requirement.deleted_at = now
+    requirement.cancelled_at = requirement.cancelled_at or now
+    requirement.run_status = RunStatus.CANCELLED.value
+    requirement.version += 1
+    pipeline = await session.scalar(select(Pipeline).where(Pipeline.requirement_id == requirement.id))
+    if pipeline is not None:
+        pipeline.run_status = RunStatus.CANCELLED.value
+    await session.execute(
+        update(AgentTask)
+        .where(
+            AgentTask.requirement_id == requirement.id,
+            AgentTask.status.in_(("queued", "running")),
+        )
+        .values(
+            status="cancelled",
+            completed_at=now,
+            error_message="Requirement deleted by user",
+        )
+    )
+    await session.execute(
+        update(AgentSession)
+        .where(
+            AgentSession.requirement_id == requirement.id,
+            AgentSession.status == "active",
+        )
+        .values(status="requirement_deleted")
+    )
+    add_audit_log(
+        session,
+        tenant_id=user.tenant_id,
+        actor_id=user.id,
+        action="requirement.delete",
+        resource_type="requirement",
+        resource_id=requirement.id,
+        trace_id=trace_id,
+        details={"workspace_retention_policy": requirement.workspace_retention_policy},
+    )
+    await session.commit()
+    await _remove_requirement_runtime(request, requirement)
+    return ApiResponse(
+        data={
+            "deleted": True,
+            "requirement_id": requirement.id,
+            "workspace_retention_policy": requirement.workspace_retention_policy,
+        }
+    )
 
 
 @router.get("/{requirement_id}/pipeline", response_model=ApiResponse[PipelineRead])
@@ -566,7 +706,15 @@ def _actions_for(requirement: Requirement, user: User) -> list[str]:
     if stage == PipelineState.REQUIREMENT_DRAFT and roles.intersection({"admin", "pm"}):
         actions.extend(["edit", "submit", "cancel"])
     elif stage == PipelineState.REQUIREMENT_CLARIFICATION and roles.intersection({"admin", "pm"}):
-        actions.extend(["edit", "generate_clarification", "answer_clarification", "confirm_clarification", "reopen_clarification"])
+        actions.extend(
+            [
+                "edit",
+                "generate_clarification",
+                "answer_clarification",
+                "confirm_clarification",
+                "reopen_clarification",
+            ]
+        )
     elif stage in AUTOMATED_STATES and roles.intersection({"admin", "developer", "pm", "qa"}):
         actions.append("start_task")
     for gate, config in GATE_CONFIG.items():
@@ -902,7 +1050,13 @@ async def reopen_clarification(
         trace_id=trace_id,
     )
     await session.commit()
-    return ApiResponse(data={"round_id": latest_round.id, "status": latest_round.status, "resource_version": requirement.version})
+    return ApiResponse(
+        data={
+            "round_id": latest_round.id,
+            "status": latest_round.status,
+            "resource_version": requirement.version,
+        }
+    )
 
 
 @router.get("/{requirement_id}/artifacts", response_model=ApiResponse[list[dict]])
@@ -1015,6 +1169,7 @@ async def review_gate(
     requirement_id: int,
     gate: ReviewGate,
     payload: ReviewRequest,
+    request: Request,
     user: CurrentUser,
     session: SessionDep,
     trace_id: TraceId,
@@ -1168,6 +1323,8 @@ async def review_gate(
         },
     )
     await session.commit()
+    if requirement.stage == PipelineState.COMPLETED.value:
+        await _remove_requirement_runtime(request, requirement)
     return ApiResponse(
         data={
             "review_id": record.id,
@@ -1225,7 +1382,11 @@ async def start_task(
         raise InvalidStateError(f"No Agent task can be started at stage '{stage.value}'")
     if payload.task_type is not None and payload.task_type != expected_task_type:
         raise ConflictError(f"Task type for this stage must be '{expected_task_type}'")
-    selected_agent_version_id = requirement.development_agent_version_id
+    selected_agent_version_id = (
+        requirement.development_document_agent_version_id
+        if expected_task_type == "development_document_generation"
+        else requirement.development_agent_version_id
+    )
     task, created = await create_agent_task(
         session,
         requirement,

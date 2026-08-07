@@ -27,6 +27,7 @@ const versionForm = reactive({
 
 const roleLabels: Record<string, string> = {
   requirement_clarification: '需求澄清',
+  development_document: '开发文档',
   development: '开发',
 }
 
@@ -136,7 +137,7 @@ onMounted(load)
 <template>
   <div class="agent-page" v-loading="loading">
     <header class="page-heading">
-      <div><h1>Agent 管理</h1><p>需求澄清与开发 Agent 的定义、版本和运行策略</p></div>
+      <div><h1>Agent 管理</h1><p>需求澄清、开发文档与代码开发 Agent 的定义、版本和运行策略</p></div>
       <div class="heading-actions">
         <el-button :icon="Refresh" @click="load">刷新</el-button>
         <el-button type="primary" :icon="Plus" @click="openCreate">新建 Agent</el-button>
@@ -168,22 +169,25 @@ onMounted(load)
                 </el-table-column>
                 <el-table-column label="创建时间" width="180"><template #default="scope">{{ formatTime(scope.row.created_at) }}</template></el-table-column>
                 <el-table-column label="操作" width="100" align="right">
-                  <template #default="scope"><el-button v-if="scope.row.status === 'draft' && row.status !== 'disabled'" text type="primary" :icon="Check" @click="publish(row, scope.row.id)">发布</el-button></template>
+                  <template #default="scope"><el-button v-if="row.can_manage && scope.row.status === 'draft' && row.status !== 'disabled'" text type="primary" :icon="Check" @click="publish(row, scope.row.id)">发布</el-button></template>
                 </el-table-column>
               </el-table>
             </div>
           </template>
         </el-table-column>
         <el-table-column prop="name" label="名称" min-width="200" />
+        <el-table-column label="归属" width="110"><template #default="{ row }"><el-tag size="small" :type="row.owner_user_id === null ? 'info' : 'success'">{{ row.owner_user_id === null ? '共享' : '个人' }}</el-tag></template></el-table-column>
         <el-table-column label="角色" width="150"><template #default="{ row }">{{ roleLabels[row.role_type] || row.role_type }}</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'">{{ row.status }}</el-tag></template></el-table-column>
         <el-table-column label="默认" width="90"><template #default="{ row }"><el-tag v-if="row.default_flag" type="primary">默认</el-tag><span v-else>-</span></template></el-table-column>
         <el-table-column label="版本数" width="90"><template #default="{ row }">{{ row.versions.length }}</template></el-table-column>
         <el-table-column label="操作" width="260" align="right">
           <template #default="{ row }">
-            <el-button v-if="row.status !== 'disabled'" text type="primary" :icon="Plus" @click="openVersion(row)">新版本</el-button>
-            <el-button v-if="row.status !== 'disabled' && !row.default_flag" text @click="setDefault(row)">设为默认</el-button>
-            <el-button v-if="row.status !== 'disabled'" text type="danger" :icon="CircleClose" @click="disable(row)">停用</el-button>
+            <template v-if="row.can_manage">
+              <el-button v-if="row.status !== 'disabled'" text type="primary" :icon="Plus" @click="openVersion(row)">新版本</el-button>
+              <el-button v-if="row.status !== 'disabled' && !row.default_flag" text @click="setDefault(row)">设为默认</el-button>
+              <el-button v-if="row.status !== 'disabled'" text type="danger" :icon="CircleClose" @click="disable(row)">停用</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -191,7 +195,7 @@ onMounted(load)
 
     <el-dialog v-model="showDefinitionDialog" title="新建 Agent" width="520px">
       <el-form label-position="top">
-        <el-form-item label="角色" required><el-segmented v-model="definitionForm.role_type" :options="[{ label: '需求澄清', value: 'requirement_clarification' }, { label: '开发', value: 'development' }]" /></el-form-item>
+        <el-form-item label="角色" required><el-segmented v-model="definitionForm.role_type" :options="[{ label: '需求澄清', value: 'requirement_clarification' }, { label: '开发文档', value: 'development_document' }, { label: '代码开发', value: 'development' }]" /></el-form-item>
         <el-form-item label="名称" required><el-input v-model="definitionForm.name" placeholder="例如：开发 Agent" /></el-form-item>
         <el-form-item><el-checkbox v-model="definitionForm.default_flag">设为该角色的默认 Agent</el-checkbox></el-form-item>
       </el-form>

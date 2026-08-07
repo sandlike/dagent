@@ -54,7 +54,7 @@ onMounted(() => {
         <el-menu-item index="/projects"><el-icon><Folder /></el-icon><span>项目空间</span></el-menu-item>
         <el-menu-item index="/requirements"><el-icon><Document /></el-icon><span>需求</span></el-menu-item>
         <el-menu-item index="/model-gateway"><el-icon><Connection /></el-icon><span>模型网关</span></el-menu-item>
-        <el-menu-item v-if="authStore.isAdmin" index="/agents"><el-icon><Setting /></el-icon><span>Agent 管理</span></el-menu-item>
+        <el-menu-item index="/agents"><el-icon><Setting /></el-icon><span>Agent 管理</span></el-menu-item>
         <el-menu-item v-if="authStore.isAdmin" index="/audit-logs"><el-icon><Tickets /></el-icon><span>审计日志</span></el-menu-item>
       </el-menu>
     </el-aside>

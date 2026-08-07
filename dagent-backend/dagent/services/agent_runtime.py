@@ -28,12 +28,21 @@ from dagent.models import (
     AgentTaskLog,
     Artifact,
     ArtifactVersion,
+    ClarificationAnswer,
+    ClarificationQuestion,
+    ClarificationRound,
     Requirement,
     RequirementWorkspace,
     ReviewRecord,
 )
 from dagent.services.domain import replace_agent_session
 from dagent.services.redaction import redact_sensitive_text
+from dagent.services.requirement_runtime import (
+    AGENT_ROLE_PORTS,
+    AGENT_ROLE_SECRET_SCOPES,
+    requirement_runtime_secret_value,
+    requirement_runtime_url,
+)
 from dagent.services.workspaces import WorkspaceManagerClient, prepare_task_workspaces
 
 
@@ -84,45 +93,76 @@ class AgentRuntime:
             directory = str((task.checkpoint if task else {}).get("workspace_root") or "")
         if not session_id:
             return
-        if role_type not in {"requirement_clarification", "development"}:
+        if role_type not in {"requirement_clarification", "development_document", "development"}:
             return
-        server_url = self._server_url_for_role(role_type)
+        server_url = self._server_url_for_role(role_type, task.requirement_id if task else None)
         with suppress(httpx.HTTPError):
-            async with httpx.AsyncClient(timeout=10, auth=self._auth()) as client:
+            async with httpx.AsyncClient(
+                timeout=10,
+                auth=self._auth(task.requirement_id if task else None, role_type),
+            ) as client:
                 await client.post(
                     f"{server_url}/session/{session_id}/abort",
                     params={"directory": directory} if directory else None,
                 )
 
-    def _auth(self) -> httpx.BasicAuth | None:
-        if not self.settings.OPENCODE_SERVER_PASSWORD:
-            return None
+    def _auth(
+        self,
+        requirement_id: int | None = None,
+        role_type: str | None = None,
+    ) -> httpx.BasicAuth:
+        if requirement_id is None:
+            raise RuntimeError("Requirement id is required for requirement runtime authentication")
+        if role_type not in AGENT_ROLE_SECRET_SCOPES:
+            raise RuntimeError(f"Unsupported Agent role {role_type}")
+        password = requirement_runtime_secret_value(
+            self.settings,
+            requirement_id,
+            AGENT_ROLE_SECRET_SCOPES[role_type],
+        )
         return httpx.BasicAuth(
             self.settings.OPENCODE_SERVER_USERNAME,
-            self.settings.OPENCODE_SERVER_PASSWORD,
+            password,
         )
 
-    def _server_url_for_role(self, role_type: str) -> str:
-        if role_type == "requirement_clarification":
-            return self.settings.REQUIREMENT_OPENCODE_SERVER_URL.rstrip("/")
-        if role_type == "development":
-            return self.settings.DEVELOPMENT_OPENCODE_SERVER_URL.rstrip("/")
-        raise RuntimeError(f"Unsupported Agent role {role_type}")
+    def _server_url_for_role(self, role_type: str, requirement_id: int | None = None) -> str:
+        if role_type not in {
+            "requirement_clarification",
+            "development_document",
+            "development",
+        }:
+            raise RuntimeError(f"Unsupported Agent role {role_type}")
+        if requirement_id is None:
+            raise RuntimeError("Requirement id is required for a requirement Agent runtime")
+        return requirement_runtime_url(
+            self.settings,
+            requirement_id,
+            AGENT_ROLE_PORTS[role_type],
+        )
 
     @staticmethod
     def _role_for_context(context: dict[str, Any]) -> str:
         snapshot = context.get("checkpoint", {}).get("agent_snapshot", {})
         role_type = str(snapshot.get("role_type") or "")
         if not role_type:
-            role_type = (
-                "requirement_clarification"
-                if context.get("task_type") == "clarification_generate"
-                else "development"
-            )
+            task_type = context.get("task_type")
+            if task_type == "clarification_generate":
+                role_type = "requirement_clarification"
+            elif task_type == "development_document_generation":
+                role_type = "development_document"
+            else:
+                role_type = "development"
         return role_type
 
     def _server_url_for_context(self, context: dict[str, Any]) -> str:
-        return self._server_url_for_role(self._role_for_context(context))
+        return self._server_url_for_role(
+            self._role_for_context(context), int(context["requirement_id"])
+        )
+
+    def _workspace_manager(self, requirement_id: int | None = None) -> WorkspaceManagerClient:
+        if self.settings.REQUIREMENT_RUNTIME_ENABLED and requirement_id is not None:
+            return WorkspaceManagerClient(self.settings, requirement_id=requirement_id)
+        return WorkspaceManagerClient(self.settings)
 
     async def _recover_interrupted_tasks(self) -> None:
         async with async_session() as session:
@@ -198,8 +238,62 @@ class AgentRuntime:
             session.add(AgentTaskLog(tenant_id=task.tenant_id, task_id=task.id, level=level, message=message[:20_000]))
             await session.commit()
 
+    async def _wait_for_requirement_runtime(self, task_id: int) -> None:
+        if not self.settings.REQUIREMENT_RUNTIME_ENABLED:
+            return
+        async with async_session() as session:
+            task = await session.get(AgentTask, task_id)
+            agent_session = (
+                await session.get(AgentSession, task.session_id)
+                if task and task.session_id
+                else None
+            )
+        if task is None or agent_session is None:
+            raise RuntimeError("Agent task no longer exists")
+        requirement_id = int(task.requirement_id)
+        role_type = str(agent_session.role_type)
+        opencode_url = self._server_url_for_role(role_type, requirement_id)
+        workspace_url = requirement_runtime_url(self.settings, requirement_id, 8090)
+        deadline = asyncio.get_running_loop().time() + min(
+            300, self.settings.AGENT_TASK_TIMEOUT_SECONDS
+        )
+        last_error = "runtime is not ready"
+        async with httpx.AsyncClient(
+            timeout=5,
+            auth=self._auth(requirement_id, role_type),
+        ) as opencode_client:
+            async with httpx.AsyncClient(timeout=5) as workspace_client:
+                while asyncio.get_running_loop().time() < deadline:
+                    await self._raise_if_task_cancelled(task_id)
+                    try:
+                        opencode_response, workspace_response = await asyncio.gather(
+                            opencode_client.get(opencode_url),
+                            workspace_client.get(f"{workspace_url}/health"),
+                        )
+                        if (
+                            opencode_response.status_code == 200
+                            and workspace_response.status_code == 200
+                        ):
+                            await self._log(
+                                task_id,
+                                "info",
+                                f"Requirement Agent Pod is ready for requirement {requirement_id}",
+                            )
+                            return
+                        last_error = (
+                            f"OpenCode HTTP {opencode_response.status_code}; "
+                            f"workspace HTTP {workspace_response.status_code}"
+                        )
+                    except httpx.HTTPError as exc:
+                        last_error = str(exc)
+                    await asyncio.sleep(2)
+        raise RuntimeError(
+            f"Requirement Agent Pod {requirement_id} did not become ready: {last_error}"
+        )
+
     async def _execute(self, task_id: int) -> None:
         try:
+            await self._wait_for_requirement_runtime(task_id)
             await self._log(task_id, "info", "Preparing requirement workspace")
             context = await self._prepare_context(task_id)
             await self._log(task_id, "info", f"OpenCode session directory: {context['workspace_root']}")
@@ -288,7 +382,12 @@ class AgentRuntime:
             requirement = await session.get(Requirement, task.requirement_id)
             if requirement is None:
                 raise RuntimeError("Task requirement no longer exists")
-            workspaces = await prepare_task_workspaces(session, task, requirement)
+            workspaces = await prepare_task_workspaces(
+                session,
+                task,
+                requirement,
+                client=self._workspace_manager(requirement.id),
+            )
             workspace_root = str(
                 PurePosixPath(workspaces[0].path).parent
                 if workspaces
@@ -318,6 +417,61 @@ class AgentRuntime:
                     )
                 ).all()
             )
+            clarification_rows = list(
+                (
+                    await session.execute(
+                        select(ClarificationRound, ClarificationQuestion, ClarificationAnswer)
+                        .outerjoin(
+                            ClarificationQuestion,
+                            ClarificationQuestion.round_id == ClarificationRound.id,
+                        )
+                        .outerjoin(
+                            ClarificationAnswer,
+                            ClarificationAnswer.question_id == ClarificationQuestion.id,
+                        )
+                        .where(ClarificationRound.requirement_id == requirement.id)
+                        .order_by(
+                            ClarificationRound.round_no,
+                            ClarificationQuestion.id,
+                            ClarificationAnswer.id,
+                        )
+                    )
+                ).all()
+            )
+            clarification_rounds: list[dict[str, Any]] = []
+            rounds_by_id: dict[int, dict[str, Any]] = {}
+            questions_by_id: dict[int, dict[str, Any]] = {}
+            for round_item, question, answer in clarification_rows:
+                round_payload = rounds_by_id.get(round_item.id)
+                if round_payload is None:
+                    round_payload = {
+                        "round_no": round_item.round_no,
+                        "status": round_item.status,
+                        "questions": [],
+                    }
+                    rounds_by_id[round_item.id] = round_payload
+                    clarification_rounds.append(round_payload)
+                if question is None:
+                    continue
+                question_payload = questions_by_id.get(question.id)
+                if question_payload is None:
+                    question_payload = {
+                        "question": question.question,
+                        "question_type": question.question_type,
+                        "options": list(question.options),
+                        "ai_recommendation": question.ai_recommendation,
+                        "answers": [],
+                    }
+                    questions_by_id[question.id] = question_payload
+                    round_payload["questions"].append(question_payload)
+                if answer is not None:
+                    question_payload["answers"].append(
+                        {
+                            "answer": self._resolve_answer_text(answer.answer, question.options),
+                            "answer_value": answer.answer,
+                            "created_at": answer.created_at.isoformat(),
+                        }
+                    )
             checkpoint = dict(task.checkpoint)
             checkpoint["workspace_root"] = workspace_root
             checkpoint["workspace_ids"] = [item.id for item in workspaces]
@@ -349,6 +503,7 @@ class AgentRuntime:
                     for item in workspaces
                 ],
                 "artifacts": artifacts,
+                "clarification_rounds": clarification_rounds,
                 "review_feedback": [
                     {
                         "gate": item.gate,
@@ -363,6 +518,25 @@ class AgentRuntime:
                 "checkpoint": checkpoint,
             }
 
+    @staticmethod
+    def _resolve_answer_text(answer: Any, options: list[dict[str, Any]]) -> Any:
+        option_labels = {
+            str(option.get("id")): (
+                f"{option.get('label')} ({option.get('description')})"
+                if option.get("description")
+                else str(option.get("label") or option.get("id") or "")
+            )
+            for option in options
+            if option.get("id") is not None
+        }
+
+        def resolve(value: Any) -> Any:
+            return option_labels.get(str(value), value)
+
+        if isinstance(answer, list):
+            return [resolve(value) for value in answer]
+        return resolve(answer)
+
     async def _ensure_session(self, task_id: int, context: dict[str, Any]) -> str:
         async with async_session() as session:
             task = await session.get(AgentTask, task_id)
@@ -370,11 +544,13 @@ class AgentRuntime:
             if task is None or agent_session is None:
                 raise RuntimeError("Agent task is not linked to a main session")
             previous = str(agent_session.opencode_session_id or "")
-            server_url = self._server_url_for_role(agent_session.role_type)
+            server_url = self._server_url_for_role(
+                agent_session.role_type, context["requirement_id"]
+            )
         params = {"directory": context["workspace_root"]}
         async with httpx.AsyncClient(
             timeout=30,
-            auth=self._auth(),
+            auth=self._auth(int(context["requirement_id"]), str(agent_session.role_type)),
         ) as client:
             if previous:
                 response = await client.get(
@@ -410,9 +586,14 @@ class AgentRuntime:
                 raise RuntimeError("Agent task no longer exists")
             replacement = await replace_agent_session(session, task, reason=reason)
             await session.commit()
-            server_url = self._server_url_for_role(replacement.role_type)
+            server_url = self._server_url_for_role(
+                replacement.role_type, context["requirement_id"]
+            )
         params = {"directory": context["workspace_root"]}
-        async with httpx.AsyncClient(timeout=30, auth=self._auth()) as client:
+        async with httpx.AsyncClient(
+            timeout=30,
+            auth=self._auth(int(context["requirement_id"]), str(replacement.role_type)),
+        ) as client:
             response = await client.post(
                 f"{server_url}/session",
                 params=params,
@@ -444,7 +625,7 @@ class AgentRuntime:
         prompt = self._build_prompt(context, correction_error=correction_error)
         async with httpx.AsyncClient(
             timeout=self.settings.AGENT_TASK_TIMEOUT_SECONDS,
-            auth=self._auth(),
+            auth=self._auth(int(context["requirement_id"]), agent),
         ) as client:
             message_url = f"{server_url}/session/{session_id}/message"
             history_response = await client.get(message_url, params={"directory": context["workspace_root"]})
@@ -492,13 +673,16 @@ class AgentRuntime:
         initial_payload: Any,
     ) -> dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + self.settings.AGENT_TASK_TIMEOUT_SECONDS
+        logged_progress: set[str] = set()
         while True:
             await self._raise_if_task_cancelled(task_id)
             history_response = await client.get(message_url, params={"directory": directory})
             await self._inspect_opencode_response(task_id, history_response)
             history_response.raise_for_status()
+            history = history_response.json()
+            await self._log_history_progress(task_id, history, existing_ids, logged_progress)
             aggregated, complete = self._aggregate_new_assistant_messages(
-                history_response.json(),
+                history,
                 existing_ids,
                 initial_payload,
             )
@@ -507,6 +691,59 @@ class AgentRuntime:
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError("OpenCode did not finish the Agent message before the task timeout")
             await asyncio.sleep(0.5)
+
+    async def _log_history_progress(
+        self,
+        task_id: int,
+        messages: Any,
+        existing_ids: set[str],
+        logged_progress: set[str],
+    ) -> None:
+        if not isinstance(messages, list):
+            return
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            info = message.get("info")
+            if not isinstance(info, dict) or info.get("role") != "assistant":
+                continue
+            message_id = str(info.get("id") or "")
+            if not message_id or message_id in existing_ids:
+                continue
+
+            finish = str(info.get("finish") or "unknown")
+            status_key = f"{message_id}:status:{finish}"
+            if status_key not in logged_progress:
+                await self._log(task_id, "info", f"Agent message {message_id} status: {finish}")
+                logged_progress.add(status_key)
+
+            parts = message.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for index, part in enumerate(parts):
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type") or "")
+                if part_type == "text" and part.get("text"):
+                    key = f"{message_id}:text:{index}:{part['text']}"
+                    if key not in logged_progress:
+                        await self._log(task_id, "info", self._redact_tool_text(str(part["text"])))
+                        logged_progress.add(key)
+                    continue
+                if part_type != "tool":
+                    continue
+                raw_state = part.get("state")
+                state: dict[str, Any] = raw_state if isinstance(raw_state, dict) else {}
+                raw_input = state.get("input")
+                tool_input: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
+                command = str(tool_input.get("command") or part.get("command") or "").strip()
+                tool_name = str(part.get("tool") or "tool")
+                detail = command or json.dumps(tool_input, ensure_ascii=False)
+                key = f"{message_id}:tool:{index}:{state.get('status')}:{detail}"
+                if key not in logged_progress:
+                    message_text = f"Agent tool {tool_name}: {detail}" if detail else f"Agent tool {tool_name}"
+                    await self._log(task_id, "info", self._redact_tool_text(message_text))
+                    logged_progress.add(key)
 
     @staticmethod
     async def _raise_if_task_cancelled(task_id: int) -> None:
@@ -638,7 +875,6 @@ class AgentRuntime:
             value,
             (
                 self.settings.AGENT_CALLBACK_TOKEN,
-                self.settings.OPENCODE_SERVER_PASSWORD,
                 self.settings.LLM_API_KEY,
             ),
         )
@@ -673,10 +909,15 @@ class AgentRuntime:
             f"Workspace root: {context['workspace_root']}\n"
             f"Repositories: {json.dumps(context['workspaces'], ensure_ascii=False)}\n"
             f"Current approved artifacts: {json.dumps(context['artifacts'], ensure_ascii=False)}\n\n"
+            "Clarification rounds and PM answers, oldest to newest; later answers override earlier answers: "
+            f"{json.dumps(context.get('clarification_rounds', []), ensure_ascii=False)}\n\n"
             f"Review decisions and feedback: {json.dumps(context.get('review_feedback', []), ensure_ascii=False)}\n"
             "Any unresolved rejection feedback must be addressed explicitly in the next result.\n\n"
             "Fixed Agent snapshot: "
             f"{json.dumps(context['checkpoint'].get('agent_snapshot', {}), ensure_ascii=False)}\n\n"
+            "The fixed Agent snapshot is the configuration selected when this requirement was created. "
+            "Use only its role, prompt reference, Skill policy, MCP policy, and tool policy. Do not load a Skill "
+            "that is not listed in skill_policy and do not enable an MCP or tool forbidden by that snapshot.\n\n"
             "Return English only. Every human-readable string in the final JSON must be written in English, even "
             "when the requirement, user input, repository content, artifacts, or review feedback are Chinese. "
             "Do not output Chinese characters in the final response.\n\n"
@@ -698,7 +939,9 @@ class AgentRuntime:
         task_type = context["task_type"]
         if task_type == "clarification_generate":
             return common + (
-                "Act as a grill-me requirement clarification agent. Analyze the requirement and repository read-only. "
+                "Load and follow the grill-me skill. Act as a requirement clarification agent and analyze the "
+                "requirement and repository read-only. Use Serena semantic tools to inspect symbols and references "
+                "when useful. "
                 "First inspect the codebase and resolve facts yourself; do not ask the user about decisions that can "
                 "be answered from existing code, models, APIs, dependencies, or conventions. Walk the decision tree, "
                 "ask one focused unresolved decision per question, and identify dependencies between decisions. "
@@ -715,7 +958,14 @@ class AgentRuntime:
             )
         if task_type == "development_document_generation":
             return common + (
-                "Read the repositories without modifying them. Produce an actionable development document. "
+                "Load and follow the dev-plan skill. Read the repositories without modifying them and use Serena "
+                "semantic tools when useful. Treat confirmed PM answers as authoritative: later clarification rounds "
+                "override earlier rounds, and confirmed answers override conflicting original requirement text. "
+                "Open every real file before citing it. impacted_modules.path must contain only verified relative file "
+                "paths you actually opened; never invent a path, module, table, endpoint, command, or dependency. "
+                "Identify affected components first, then write ordered, concrete implementation steps. Keep data "
+                "model changes, API/interface changes, implementation, rollback, and tests distinct. "
+                "Produce an actionable development document without changing code. "
                 'Return only JSON with "output_summary" and "artifact_content". Write human-readable values in '
                 "English. The artifact must cover goals, non-goals, impacted modules, frontend/backend/"
                 "Agent/data changes, APIs, implementation steps, risks, rollback, tests, and acceptance checklist."
@@ -896,7 +1146,7 @@ class AgentRuntime:
             raise RuntimeError(str(exc)) from exc
 
     async def _verify_read_only_workspaces(self, context: dict[str, Any]) -> None:
-        manager = WorkspaceManagerClient(self.settings)
+        manager = self._workspace_manager(context.get("requirement_id"))
         for workspace in context["workspaces"]:
             current = await manager.status(workspace["path"])
             if str(current.get("head_commit") or "") != str(workspace.get("head_commit") or ""):
@@ -922,7 +1172,7 @@ class AgentRuntime:
             for item in existing
         ):
             return result
-        manager = WorkspaceManagerClient(self.settings)
+        manager = self._workspace_manager(context.get("requirement_id"))
         reconciled: list[dict[str, str]] = []
         for workspace in context.get("workspaces", []):
             try:
@@ -953,7 +1203,7 @@ class AgentRuntime:
         context: dict[str, Any],
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        manager = WorkspaceManagerClient(self.settings)
+        manager = self._workspace_manager(context.get("requirement_id"))
         commits = []
         async with async_session() as session:
             for workspace_data in context["workspaces"]:

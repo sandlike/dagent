@@ -26,17 +26,39 @@ class Settings(BaseSettings):
 
     # OpenCode execution plane
     AGENT_RUNTIME_ENABLED: bool = False
-    REQUIREMENT_OPENCODE_SERVER_URL: str = "http://dagent-requirement-agent:4096"
-    DEVELOPMENT_OPENCODE_SERVER_URL: str = "http://dagent-development-agent:4096"
     OPENCODE_SERVER_USERNAME: str = "opencode"
-    OPENCODE_SERVER_PASSWORD: str = ""
-    WORKSPACE_MANAGER_URL: str = "http://dagent-development-agent:8090"
+    WORKSPACE_MANAGER_URL: str = "http://dagent-repository-verifier:8090"
     GIT_CREDENTIAL_ENCRYPTION_KEY: str = ""
     AGENT_POLL_INTERVAL_SECONDS: float = 2.0
     AGENT_RUNTIME_WORKERS: int = 2
     AGENT_TASK_TIMEOUT_SECONDS: int = 3600
     AGENT_INTERNAL_API_URL: str = "http://127.0.0.1:8000/api/v1"
     AGENT_WORKSPACE_ROOT: str = "/workspaces"
+
+    # One requirement, one persistent Agent runtime Pod.
+    REQUIREMENT_RUNTIME_ENABLED: bool = False
+    REQUIREMENT_RUNTIME_NAMESPACE: str = "dagent"
+    REQUIREMENT_CLARIFICATION_IMAGE: str = (
+        "registry.cn-hangzhou.aliyuncs.com/citics_lwj/"
+        "dagent-requirement-clarification:1.0.1"
+    )
+    DEVELOPMENT_DOCUMENT_IMAGE: str = (
+        "registry.cn-hangzhou.aliyuncs.com/citics_lwj/"
+        "dagent-development-document:1.0.1"
+    )
+    DEVELOPMENT_AGENT_IMAGE: str = (
+        "registry.cn-hangzhou.aliyuncs.com/citics_lwj/"
+        "dagent-development:1.0.1"
+    )
+    REQUIREMENT_RUNTIME_INIT_IMAGE: str = (
+        "registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12"
+    )
+    REQUIREMENT_RUNTIME_IMAGE_PULL_SECRET: str = "opencode-pull-secret"
+    REQUIREMENT_RUNTIME_STORAGE_CLASS: str = ""
+    REQUIREMENT_RUNTIME_STORAGE_SIZE: str = "10Gi"
+    REQUIREMENT_RUNTIME_RECONCILE_SECONDS: float = 15.0
+    REQUIREMENT_RUNTIME_SERVICE_TEMPLATE: str = "http://dagent-requirement-{requirement_id}"
+    REQUIREMENT_RUNTIME_NODE_NAME: str = ""
 
     # LLM
     LLM_API_BASE_URL: str = ""

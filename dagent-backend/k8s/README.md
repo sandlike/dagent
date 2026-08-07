@@ -1,58 +1,78 @@
 # Dagent Kubernetes deployment
 
-This overlay deploys these workloads into the `dagent` namespace:
+The deployment uses one persistent runtime Pod per non-terminal requirement.
 
-- One Dagent backend replica exposed by a ClusterIP Service
-- Two Nginx frontend replicas exposed by an approved HTTPS test tunnel
-- One persistent requirement-clarification OpenCode Pod
-- One persistent development OpenCode Pod with workspace manager sidecar and monitoring handled by the cluster
-- An `ExternalName` Service named `mysql` that resolves to the existing Alibaba Cloud RDS endpoint
+```text
+create requirement
+-> backend creates Deployment + Service + dedicated PVC
+-> initContainer prepares isolated state directories and runtime credentials
+-> three Agent containers and workspace-manager start
+-> requirement waits, runs, or waits for approval without losing the Pod
+-> completion, cancellation, or deletion removes Deployment and Service
+-> PVC is retained or deleted according to workspace_retention_policy
+```
 
-Redis is not required by this implementation. MySQL is provided by RDS rather than a MySQL Pod in ACK.
-The two main Agents use separate Deployments, Services, and OpenCode state directories. The requirement Agent mounts
-workspaces read-only. The development Agent uses the preinstalled Python/pytest, Node.js/npm, Java/JDK/Maven/Gradle,
-Go, and Git toolchain for minimal unit and smoke checks. No Testing Agent, Test Runner, test Job, or test Pod is created.
+Each requirement Pod contains four independent containers:
 
-The manifests never contain production credentials. Create these Secrets before applying the overlay:
+- `requirement-clarification` on port `4096`: Wang Tianyou's clarification behavior with `grill-me`
+- `development-document` on port `4097`: Wang Tianyou's grounded development-plan behavior with `dev-plan`
+- `development` on port `4098`: repository implementation and focused checks
+- `workspace-manager` on port `8090`: requirement Workspace preparation and Git operations
+
+Each Agent has its own image, OpenCode process, configuration, Skill, password, port,
+and state directory. Clarification and development-document mount the requirement
+Workspace read-only; development and workspace-manager can write it. The containers
+share only their requirement's Pod and PVC and cannot mount another requirement's
+Workspace. A NetworkPolicy allows inbound Agent/workspace traffic only from
+`dagent-backend`. Agent results and logs are persisted by the backend before the runtime
+is removed. Deleting a runtime never deletes requirement, result, task-log, or audit rows
+from MySQL.
+
+The three local image projects are:
+
+- `k8s/agent/images/requirement-clarification`
+- `k8s/agent/images/development-document`
+- `k8s/agent/images/development`
+
+They build these registry images:
+
+- `registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-requirement-clarification:1.0.1`
+- `registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-development-document:1.0.1`
+- `registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-development:1.0.1`
+
+No image is built when a requirement is created. If local Docker is unavailable, create
+the three versioned build-context ConfigMaps and let the Kaniko Jobs build them in K8s:
+
+```powershell
+kubectl -n dagent create configmap dagent-requirement-clarification-image-v2 `
+  --from-file=k8s/agent/images/requirement-clarification
+kubectl -n dagent create configmap dagent-development-document-image-v2 `
+  --from-file=k8s/agent/images/development-document
+kubectl -n dagent create configmap dagent-development-image-v2 `
+  --from-file=k8s/agent/images/development
+kubectl apply -f k8s/agent/build-agent-images.yaml
+kubectl -n dagent wait --for=condition=complete job `
+  -l app.kubernetes.io/part-of=dagent --timeout=15m
+kubectl apply -k k8s
+```
+
+The overlay also deploys the backend, two Nginx frontend replicas, a repository
+verification workspace-manager, RBAC for dynamic requirement resources, and the test
+Cloudflare tunnel. MySQL remains on Alibaba Cloud RDS; Redis is not used.
+
+Required Secrets:
 
 - `dagent-rds`: `DATABASE_URL`
 - `dagent-secrets`: `JWT_SECRET_KEY`
-- `dagent-git-credential-key`: `GIT_CREDENTIAL_ENCRYPTION_KEY` (a fixed Fernet key)
+- `dagent-git-credential-key`: `GIT_CREDENTIAL_ENCRYPTION_KEY`
 - `dagent-glm`: `GLM_API_KEY`
 - `dagent-agent-callback`: `AGENT_CALLBACK_TOKEN`
-- `dagent-development-agent-auth`: `OPENCODE_SERVER_PASSWORD`
 - `opencode-pull-secret`: registry pull credentials
 
-Build and push the image referenced by `kustomization.yaml`, then deploy:
+The current ACK cluster has no default StorageClass, so the overlay explicitly uses
+`alicloud-disk-topology-alltype` and a 20Gi PVC per requirement. `retain` is the default
+workspace policy. Select `delete` when creating the requirement to remove its PVC when
+the requirement finishes or is deleted.
 
-```powershell
-kubectl -n dagent create configmap dagent-opencode-runtime-build-v2 `
-  --from-file=Dockerfile=k8s/agent/Dockerfile
-kubectl apply -f k8s/agent/runtime-build-job.yaml
-kubectl -n dagent wait --for=condition=complete job/dagent-opencode-runtime-build-v2 --timeout=20m
-kubectl apply -k k8s
-kubectl -n dagent rollout status deployment/dagent-backend
-kubectl -n dagent rollout status deployment/dagent-requirement-agent
-kubectl -n dagent rollout status deployment/dagent-development-agent
-kubectl -n dagent port-forward service/dagent-backend 8000:8000
-```
-
-The frontend static bundle is intentionally separate from the manifests because the
-development machine does not require Docker. Build it, archive `dist`, and create the
-versioned bundle before applying the overlay:
-
-```powershell
-npm run build
-tar -czf frontend.tar.gz -C dist .
-kubectl -n dagent create configmap dagent-frontend-bundle-v1 `
-  --from-file=frontend.tar.gz=frontend.tar.gz
-kubectl apply -k k8s
-```
-
-The approved test deployment uses a Cloudflare Quick Tunnel because arbitrary domains
-on the Alibaba Cloud mainland-China gateway are blocked until ICP filing is complete.
-Read the generated `https://*.trycloudflare.com` URL from the tunnel Pod logs. Quick
-Tunnel URLs change after the tunnel Pod restarts; use an owned, ICP-filed domain and a
-valid TLS certificate before production use. Do not expose login over plain HTTP.
-
-`AUTO_CREATE_SCHEMA` and `SEED_DEMO_DATA` are enabled for the first test deployment. Disable demo seeding and use migrations before a production rollout.
+`AUTO_CREATE_SCHEMA` and `SEED_DEMO_DATA` are enabled only for this test deployment.
+Use versioned migrations and disable demo seeding before production.

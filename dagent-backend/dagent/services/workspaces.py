@@ -19,6 +19,7 @@ from dagent.models import (
     RequirementWorkspace,
 )
 from dagent.services.credentials import decrypt_git_token
+from dagent.services.requirement_runtime import requirement_runtime_secret_value
 
 
 @dataclass(frozen=True)
@@ -66,16 +67,37 @@ def resolve_repository_credential(
 
 
 class WorkspaceManagerClient:
-    def __init__(self, settings: Settings | None = None):
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        requirement_id: int | None = None,
+        base_url: str | None = None,
+    ):
         self.settings = settings or get_settings()
+        self.token = self.settings.AGENT_CALLBACK_TOKEN
+        if base_url:
+            self.base_url = base_url.rstrip("/")
+        elif self.settings.REQUIREMENT_RUNTIME_ENABLED and requirement_id is not None:
+            self.base_url = (
+                self.settings.REQUIREMENT_RUNTIME_SERVICE_TEMPLATE.format(
+                    requirement_id=requirement_id
+                ).rstrip("/")
+                + ":8090"
+            )
+            self.token = requirement_runtime_secret_value(
+                self.settings, requirement_id, "workspace"
+            )
+        else:
+            self.base_url = self.settings.WORKSPACE_MANAGER_URL.rstrip("/")
 
     async def _post(self, path: str, payload: dict[str, Any], timeout: float = 120.0) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
-                    f"{self.settings.WORKSPACE_MANAGER_URL.rstrip('/')}{path}",
+                    f"{self.base_url}{path}",
                     json=payload,
-                    headers={"Authorization": f"Bearer {self.settings.AGENT_CALLBACK_TOKEN}"},
+                    headers={"Authorization": f"Bearer {self.token}"},
                 )
             response.raise_for_status()
             result = response.json()
@@ -226,7 +248,7 @@ async def push_requirement_workspaces(
             )
         ).all()
     )
-    manager = WorkspaceManagerClient()
+    manager = WorkspaceManagerClient(requirement_id=requirement.id)
     for workspace in workspaces:
         repository = await session.get(Repository, workspace.repository_id)
         if repository is None:
@@ -276,7 +298,7 @@ async def prepare_task_workspaces(
 ) -> list[RequirementWorkspace]:
     repositories = await requirement_repositories(session, requirement.id)
     write_branch = task.task_type in {"development", "failure_fix"}
-    manager = client or WorkspaceManagerClient()
+    manager = client or WorkspaceManagerClient(requirement_id=requirement.id)
     prepared = await manager.prepare(
         tenant_id=task.tenant_id,
         requirement_id=requirement.id,

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "bigmodel/glm-4.7-flash",
+  "small_model": "bigmodel/glm-4.7-flash",
+  "provider": {
+    "bigmodel": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Dagent model gateway",
+      "options": {
+        "baseURL": "http://dagent-backend:8000/api/v1/model-proxy/v1",
+        "timeout": 300000,
+        "apiKey": "{env:AGENT_CALLBACK_TOKEN}"
+      },
+      "models": { "glm-4.7-flash": { "name": "Dagent routed model" } }
+    }
+  },
+  "mcp": {
+    "serena": {
+      "type": "local",
+      "command": ["serena", "start-mcp-server", "--context", "ide", "--project-from-cwd"],
+      "enabled": true,
+      "timeout": 30000
+    }
+  },
+  "tools": {
+    "serena__replace_symbol_body": false,
+    "serena__insert_after_symbol": false,
+    "serena__insert_before_symbol": false,
+    "serena__safe_delete": false,
+    "serena__rename_symbol": false,
+    "serena__replace_content": false,
+    "serena__execute_shell_command": false
+  },
+  "agent": {
+    "development_document": {
+      "description": "Code-grounded development document Agent",
+      "mode": "primary",
+      "model": "bigmodel/glm-4.7-flash",
+      "steps": 18,
+      "prompt": "Load and follow the dev-plan skill. Open real repository files before citing them and create a grounded development document using exactly the backend-requested JSON contract. Stay read-only. Never edit files, call child agents, expose secrets, push, merge, or access another requirement workspace.",
+      "permission": {
+        "read": "allow",
+        "edit": "deny",
+        "grep": "allow",
+        "glob": "allow",
+        "list": "allow",
+        "skill": "allow",
+        "question": "deny",
+        "external_directory": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "bash": "deny"
+      }
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "deny",
+    "grep": "allow",
+    "glob": "allow",
+    "list": "allow",
+    "skill": "allow",
+    "question": "deny",
+    "external_directory": "deny",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "bash": "deny"
+  }
+}

@@ -13,12 +13,17 @@ class AgentSettings(BaseSettings):
     llm_temperature: float = 0.7
     llm_max_tokens: int = 4096
 
+    # --- Backend connection --------------------------------------------
+    backend_api_base_url: str = "http://localhost:8000"
+    agent_callback_token: str = ""
+    poll_interval_seconds: int = 5
+
     # --- Qoder / OpenCode ---------------------------------------------
     qoder_api_base_url: str = ""
     qoder_api_key: str = ""
 
     # --- Codebase working dir -----------------------------------------
-    codebase_work_dir: str = "/tmp/dagent-codebases"
+    codebase_work_dir: str = "/workspace/.codebases"
 
     # --- Retry / timeout -----------------------------------------------
     agent_max_retries: int = 3

@@ -25,7 +25,9 @@ export interface RequirementCreate {
   priority: PriorityCode
   repository_ids: number[]
   requirement_agent_version_id?: number
+  development_document_agent_version_id?: number
   development_agent_version_id?: number
+  workspace_retention_policy?: 'retain' | 'delete'
 }
 
 export interface ReviewPayload {
@@ -65,6 +67,11 @@ export const requirementApi = {
       reason,
       confirmed: true,
     }),
+  delete: (id: number, resourceVersion: number) =>
+    client.delete<never, ApiResponse<{ deleted: boolean; requirement_id: number; workspace_retention_policy: string }>>(
+      `/requirements/${id}`,
+      { params: { resource_version: resourceVersion } },
+    ),
   pipeline: (id: number) =>
     client.get<never, ApiResponse<PipelineDetail>>(`/requirements/${id}/pipeline`),
   actions: (id: number) => client.get<never, ApiResponse<string[]>>(`/requirements/${id}/actions`),

@@ -108,11 +108,14 @@ export interface Requirement {
   created_by: number
   assignee_id: number | null
   requirement_agent_version_id: number | null
+  development_document_agent_version_id: number | null
   development_agent_version_id: number | null
+  workspace_retention_policy: 'retain' | 'delete'
   repository_ids: number[]
   created_at: string
   updated_at: string
   completed_at: string | null
+  deleted_at: string | null
 }
 
 export interface StageHistory {
@@ -239,7 +242,9 @@ export interface AgentVersion {
 
 export interface AgentDefinition {
   id: number
-  role_type: 'requirement_clarification' | 'development'
+  owner_user_id: number | null
+  can_manage: boolean
+  role_type: 'requirement_clarification' | 'development_document' | 'development'
   name: string
   status: string
   default_flag: boolean
@@ -305,11 +310,14 @@ export interface AuditLog {
 export type ModelRouteStatus = 'active' | 'disabled'
 export type ModelHealthStatus = 'unknown' | 'healthy' | 'unhealthy'
 export type ModelApiProtocol = 'auto' | 'chat_completions' | 'responses'
+export type ConfiguredModelApiProtocol = Exclude<ModelApiProtocol, 'auto'>
 export type DetectedModelApiProtocol = 'chat_completions' | 'responses'
 export type ModelFallbackError = 'quota_exhausted' | 'rate_limited' | 'timeout' | 'server_error' | 'authentication_error'
 
 export interface ModelRoute {
   id: number
+  owner_user_id: number | null
+  can_manage: boolean
   name: string
   provider: string
   model: string
@@ -389,7 +397,7 @@ export interface ProjectModelRoute {
   resource_version: number
 }
 
-export type AgentModelType = 'requirement_clarification' | 'development'
+export type AgentModelType = 'requirement_clarification' | 'development_document' | 'development'
 
 export interface UserModelQuota {
   quota_limit: number

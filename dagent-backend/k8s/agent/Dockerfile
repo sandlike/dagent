@@ -15,12 +15,15 @@ RUN apk add --no-cache \
       go \
       gradle \
       maven \
+      linux-headers \
       py3-pip \
       py3-pytest \
       python3 \
+      python3-dev \
+      uv \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
-    && python -m pip install --break-system-packages uv \
-    && uv tool install -p 3.13 serena-agent \
+    && uv tool install --default-index https://mirrors.aliyun.com/pypi/simple \
+      --python /usr/bin/python3 serena-agent==1.6.1 \
     && npm config set registry https://registry.npmmirror.com \
     && npm install --global @playwright/test@1.54.2 playwright@1.54.2 \
     && npm cache clean --force \

@@ -62,7 +62,9 @@ async def _check(
     if repository is None:
         raise ConflictError("Workspace repository no longer exists")
     credential = resolve_repository_credential(repository)
-    result = await WorkspaceManagerClient().merge_check(workspace.path, target_branch, credential)
+    result = await WorkspaceManagerClient(requirement_id=workspace.requirement_id).merge_check(
+        workspace.path, target_branch, credential
+    )
     return MergeCheckResult(
         workspace_id=workspace.id,
         can_merge=bool(result.get("can_merge")),
@@ -162,7 +164,7 @@ async def enter_merge_queue(
         if repository is None:
             raise ConflictError("Workspace repository no longer exists")
         try:
-            result = await WorkspaceManagerClient().merge(
+            result = await WorkspaceManagerClient(requirement_id=requirement_id).merge(
                 workspace.path,
                 target,
                 resolve_repository_credential(repository),
@@ -212,7 +214,7 @@ async def push_workspace(
     repository = await session.get(Repository, workspace.repository_id)
     if repository is None:
         raise ConflictError("Workspace repository no longer exists")
-    result = await WorkspaceManagerClient().push(
+    result = await WorkspaceManagerClient(requirement_id=requirement_id).push(
         workspace.path,
         resolve_repository_credential(repository),
     )

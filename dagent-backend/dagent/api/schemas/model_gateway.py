@@ -16,9 +16,10 @@ FallbackError = Literal[
 ]
 RouteStatus = Literal["active", "disabled"]
 HealthStatus = Literal["unknown", "healthy", "unhealthy"]
-AgentModelType = Literal["requirement_clarification", "development"]
+AgentModelType = Literal["requirement_clarification", "development_document", "development"]
 ModelLevel = Literal["high", "standard", "economy"]
 ApiProtocol = Literal["auto", "chat_completions", "responses"]
+ConfiguredApiProtocol = Literal["chat_completions", "responses"]
 DetectedApiProtocol = Literal["chat_completions", "responses"]
 
 
@@ -31,7 +32,7 @@ class ModelRouteCreate(BaseModel):
     provider: str = Field(min_length=1, max_length=50)
     model: str = Field(min_length=1, max_length=160)
     base_url: AnyHttpUrl
-    api_protocol: ApiProtocol = "auto"
+    api_protocol: ConfiguredApiProtocol = "chat_completions"
     priority: int = Field(ge=1, le=1000)
     quota_limit: int = Field(default=50_000, ge=1)
     reset_policy: Literal["manual"] = "manual"
@@ -72,7 +73,7 @@ class ModelRouteUpdate(BaseModel):
     provider: str | None = Field(default=None, min_length=1, max_length=50)
     model: str | None = Field(default=None, min_length=1, max_length=160)
     base_url: AnyHttpUrl | None = None
-    api_protocol: ApiProtocol | None = None
+    api_protocol: ConfiguredApiProtocol | None = None
     priority: int | None = Field(default=None, ge=1, le=1000)
     quota_limit: int | None = Field(default=None, ge=1)
     timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
@@ -116,6 +117,8 @@ class ModelRouteUpdate(BaseModel):
 
 class ModelRouteRead(ORMModel):
     id: int
+    owner_user_id: int | None
+    can_manage: bool = False
     name: str
     provider: str
     model: str

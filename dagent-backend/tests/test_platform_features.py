@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from textwrap import dedent
 
 import httpx
 import pytest
@@ -17,6 +16,7 @@ from dagent.models import (
     AuditLog,
     ModelRoute,
     Repository,
+    Requirement,
     RequirementWorkspace,
 )
 from dagent.services.agent_runtime import AgentRuntime, AgentTaskCancelled, OutputFormatJsonSchemaIncompatible
@@ -209,14 +209,15 @@ def test_output_format_schema_error_is_detected_from_opencode_response():
         AgentRuntime._raise_if_output_format_incompatible(response)
 
 
-def test_agent_roles_route_to_independent_opencode_services():
+def test_agent_roles_route_to_requirement_scoped_opencode_service():
     runtime = AgentRuntime(get_settings())
-    assert runtime._server_url_for_role("requirement_clarification").endswith("dagent-requirement-agent:4096")
-    assert runtime._server_url_for_role("development").endswith("dagent-development-agent:4096")
+    assert runtime._server_url_for_role("requirement_clarification", 12).endswith("dagent-requirement-12:4096")
+    assert runtime._server_url_for_role("development_document", 12).endswith("dagent-requirement-12:4097")
+    assert runtime._server_url_for_role("development", 12).endswith("dagent-requirement-12:4098")
 
 
 async def test_opencode_400_body_is_redacted_before_task_logging(monkeypatch):
-    settings = get_settings().model_copy(update={"OPENCODE_SERVER_PASSWORD": "private-password"})
+    settings = get_settings().model_copy(update={"LLM_API_KEY": "private-password"})
     runtime = AgentRuntime(settings)
     messages = []
 
@@ -963,9 +964,7 @@ def test_task_modes_disable_child_agents_and_enforce_read_only_tools():
 
 
 def test_development_agent_bash_uses_denylist_instead_of_allowlist():
-    manifest = Path("k8s/agent/development-agent.yaml").read_text(encoding="utf-8")
-    config_block = dedent(manifest.split("opencode.json: |", 1)[1].split("\n---", 1)[0])
-    config = json.loads(config_block)
+    config = json.loads(Path("k8s/agent/bundle-v2/opencode.json").read_text(encoding="utf-8"))
 
     expected_bash_policy = {
         "*": "allow",
@@ -975,7 +974,6 @@ def test_development_agent_bash_uses_denylist_instead_of_allowlist():
         "rm -rf *": "deny",
     }
     assert config["agent"]["development"]["permission"]["bash"] == expected_bash_policy
-    assert config["permission"]["bash"] == expected_bash_policy
 
 
 async def test_default_development_agent_snapshot_does_not_advertise_a_shell_allowlist():
@@ -1138,6 +1136,78 @@ async def create_requirement(client: AsyncClient, users, key: str):
         )
     )
     return project, repository, requirement
+
+
+async def test_requirement_pod_lifecycle_and_soft_delete_preserve_database_records(
+    app,
+    client: AsyncClient,
+    users,
+):
+    ensured: list[tuple[int, int]] = []
+    removed: list[tuple[int, bool]] = []
+
+    class Runtime:
+        async def ensure_requirement(self, requirement_id: int, tenant_id: int):
+            ensured.append((requirement_id, tenant_id))
+
+        async def remove_requirement(self, requirement_id: int, *, delete_workspace: bool):
+            removed.append((requirement_id, delete_workspace))
+
+    app.state.requirement_runtime = Runtime()
+    project, _, requirement = await create_requirement(client, users, "pod-lifecycle")
+    assert ensured == [(requirement["id"], 1)]
+
+    requirement = payload(
+        await client.patch(
+            f"/api/v1/requirements/{requirement['id']}",
+            json={
+                "workspace_retention_policy": "delete",
+                "resource_version": requirement["version"],
+            },
+            headers=users["pm"]["headers"],
+        )
+    )
+    deleted = payload(
+        await client.delete(
+            f"/api/v1/requirements/{requirement['id']}",
+            params={"resource_version": requirement["version"]},
+            headers=users["pm"]["headers"],
+        )
+    )
+    assert deleted == {
+        "deleted": True,
+        "requirement_id": requirement["id"],
+        "workspace_retention_policy": "delete",
+    }
+    assert removed == [(requirement["id"], True)]
+
+    assert (
+        await client.get(
+            f"/api/v1/requirements/{requirement['id']}",
+            headers=users["pm"]["headers"],
+        )
+    ).status_code == 404
+    listed = payload(
+        await client.get(
+            "/api/v1/requirements",
+            params={"project_id": project["id"]},
+            headers=users["pm"]["headers"],
+        )
+    )
+    assert requirement["id"] not in {item["id"] for item in listed["items"]}
+
+    async with async_session() as session:
+        stored = await session.get(Requirement, requirement["id"])
+        assert stored is not None
+        assert stored.deleted_at is not None
+        audit = await session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "requirement.delete",
+                AuditLog.resource_id == requirement["id"],
+            )
+        )
+        assert audit is not None
+        assert audit.details["workspace_retention_policy"] == "delete"
 
 
 async def test_repository_credentials_are_encrypted_hidden_and_used_for_verification(
@@ -1381,6 +1451,7 @@ async def test_agent_version_management_and_audit_permissions(client: AsyncClien
     listed = payload(await client.get("/api/v1/agent-definitions", headers=users["admin"]["headers"]))
     assert {item["role_type"] for item in listed} <= {
         "requirement_clarification",
+        "development_document",
         "development",
     }
     hidden = await client.get(
@@ -1389,12 +1460,46 @@ async def test_agent_version_management_and_audit_permissions(client: AsyncClien
     )
     assert hidden.status_code == 404
 
-    denied = await client.post(
-        "/api/v1/agent-definitions",
-        json={"role_type": "development", "name": "Denied", "default_flag": False},
-        headers=users["developer"]["headers"],
+    personal = payload(
+        await client.post(
+            "/api/v1/agent-definitions",
+            json={"role_type": "development", "name": "Personal development", "default_flag": False},
+            headers=users["developer"]["headers"],
+        )
     )
-    assert denied.status_code == 403
+    assert personal["owner_user_id"] == users["developer"]["id"]
+    assert personal["can_manage"] is True
+    pm_definitions = payload(
+        await client.get("/api/v1/agent-definitions", headers=users["pm"]["headers"])
+    )
+    assert personal["id"] not in {item["id"] for item in pm_definitions}
+    cross_user_update = await client.patch(
+        f"/api/v1/agent-definitions/{personal['id']}",
+        json={"name": "Not allowed"},
+        headers=users["pm"]["headers"],
+    )
+    assert cross_user_update.status_code == 404
+    personal_version = payload(
+        await client.post(
+            f"/api/v1/agent-definitions/{personal['id']}/versions",
+            json={
+                "style": "balanced",
+                "prompt_ref": "opencode://agent/development",
+                "skill_policy": ["code-change"],
+                "mcp_policy": {},
+                "tool_policy": {},
+            },
+            headers=users["developer"]["headers"],
+        )
+    )
+    personal_published = payload(
+        await client.post(
+            f"/api/v1/agent-definitions/{personal['id']}/publish",
+            json={"version_id": personal_version["id"]},
+            headers=users["developer"]["headers"],
+        )
+    )
+    assert personal_published["versions"][0]["status"] == "published"
 
     definition = payload(
         await client.post(
@@ -1885,3 +1990,68 @@ def test_development_prompt_does_not_require_report_fields():
     }
     prompt = runtime._build_prompt(context)
     assert "Do not assume any field is required" in prompt
+
+
+def test_agent_resolves_choice_answers_for_prompt_context():
+    runtime = AgentRuntime(get_settings())
+    options = [
+        {"id": "a", "label": "Keep current API", "description": "No breaking change"},
+        {"id": "b", "label": "Create v2"},
+    ]
+
+    assert runtime._resolve_answer_text("a", options) == "Keep current API (No breaking change)"
+    assert runtime._resolve_answer_text(["b", "custom answer"], options) == ["Create v2", "custom answer"]
+
+
+def test_clarification_prompt_loads_skill_and_includes_ordered_rounds():
+    runtime = AgentRuntime(get_settings())
+    prompt = runtime._build_prompt(
+        {
+            "task_id": 90,
+            "requirement_id": 11,
+            "title": "Clarify API behavior",
+            "description": "Decide how the API should behave.",
+            "input_summary": "Generate the next questions",
+            "task_type": "clarification_generate",
+            "task_mode": "requirement_clarification",
+            "workspace_root": "/workspaces/req-11",
+            "workspaces": [],
+            "artifacts": {},
+            "clarification_rounds": [
+                {"round_no": 1, "status": "answered", "questions": [{"answer": "legacy"}]},
+                {"round_no": 2, "status": "answered", "questions": [{"answer": "current"}]},
+            ],
+            "review_feedback": [],
+            "checkpoint": {"agent_snapshot": {"role_type": "requirement_clarification"}},
+        }
+    )
+
+    assert "Load and follow the grill-me skill" in prompt
+    assert "later answers override earlier answers" in prompt
+    assert prompt.index('"round_no": 1') < prompt.index('"round_no": 2')
+
+
+def test_development_document_prompt_requires_verified_paths_and_latest_answers():
+    runtime = AgentRuntime(get_settings())
+    prompt = runtime._build_prompt(
+        {
+            "task_id": 91,
+            "requirement_id": 11,
+            "title": "Plan API behavior",
+            "description": "Prepare the development document.",
+            "input_summary": "Generate a grounded plan",
+            "task_type": "development_document_generation",
+            "task_mode": "development_document",
+            "workspace_root": "/workspaces/req-11",
+            "workspaces": [],
+            "artifacts": {},
+            "clarification_rounds": [],
+            "review_feedback": [],
+            "checkpoint": {"agent_snapshot": {"role_type": "development"}},
+        }
+    )
+
+    assert "Load and follow the dev-plan skill" in prompt
+    assert "Open every real file before citing it" in prompt
+    assert "later clarification rounds override earlier rounds" in prompt
+    assert "impacted_modules.path" in prompt

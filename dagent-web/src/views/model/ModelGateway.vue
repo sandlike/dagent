@@ -35,6 +35,7 @@ interface AgentBindingDraft {
 
 const agentTypes = reactive<AgentBindingDraft[]>([
   { value: 'requirement_clarification', label: '需求澄清 Agent', route_ids: [], pending_route_id: null },
+  { value: 'development_document', label: '开发文档 Agent', route_ids: [], pending_route_id: null },
   { value: 'development', label: '开发 Agent', route_ids: [], pending_route_id: null },
 ])
 
@@ -59,7 +60,7 @@ const platformForm = reactive<ModelRouteInput>({
   provider: 'openai-compatible',
   model: '',
   base_url: '',
-  api_protocol: 'auto',
+  api_protocol: 'chat_completions',
   priority: 100,
   quota_limit: 50_000,
   timeout_ms: 300_000,
@@ -75,7 +76,7 @@ const platformForm = reactive<ModelRouteInput>({
 })
 
 const routes = computed(() => gateway.value?.routes ?? [])
-const displayRoutes = computed(() => authStore.isAdmin ? platformRoutes.value : routes.value)
+const displayRoutes = computed(() => platformRoutes.value)
 const quota = computed(() => gateway.value?.quota)
 const bindings = computed(() => gateway.value?.bindings ?? [])
 function bindingFor(agentType: AgentModelType) {
@@ -138,9 +139,7 @@ async function loadAll() {
   try {
     const gatewayResponse = await modelGatewayApi.myGateway()
     gateway.value = gatewayResponse.data
-    platformRoutes.value = authStore.isAdmin
-      ? (await modelGatewayApi.routes({ page: 1, page_size: 100 })).data.items
-      : []
+    platformRoutes.value = (await modelGatewayApi.routes({ page: 1, page_size: 100 })).data.items
     syncBindingDrafts()
     await loadLogs()
   } finally {
@@ -154,7 +153,7 @@ function resetPlatformForm() {
     provider: 'openai-compatible',
     model: '',
     base_url: '',
-    api_protocol: 'auto',
+    api_protocol: 'chat_completions',
     priority: 100,
     quota_limit: 50_000,
     timeout_ms: 300_000,
@@ -183,7 +182,7 @@ function openPlatformEdit(route: ModelRoute) {
     provider: route.provider,
     model: route.model,
     base_url: route.base_url,
-    api_protocol: route.api_protocol,
+    api_protocol: route.api_protocol === 'auto' ? 'chat_completions' : route.api_protocol,
     priority: route.priority,
     quota_limit: route.quota_limit,
     timeout_ms: route.timeout_ms,
@@ -230,7 +229,7 @@ async function savePlatformRoute() {
       if (platformForm.api_protocol !== route.api_protocol) update.api_protocol = platformForm.api_protocol
       if (token) update.api_token = token
       await modelGatewayApi.updateRoute(route.id, update)
-      ElMessage.success('平台模型已更新')
+      ElMessage.success('模型已更新')
     } else {
       await modelGatewayApi.createRoute({
         ...platformForm,
@@ -241,7 +240,7 @@ async function savePlatformRoute() {
         api_protocol: platformForm.api_protocol,
         api_token: token || null,
       })
-      ElMessage.success('平台模型已添加，请先验证连接再启用')
+      ElMessage.success('模型已添加，请先验证连接再启用')
     }
     showPlatformDialog.value = false
     await loadAll()
@@ -275,7 +274,7 @@ async function testPlatformRoute(route: ModelRoute) {
 async function togglePlatformRoute(route: ModelRoute) {
   if (route.status === 'disabled') await modelGatewayApi.enableRoute(route.id)
   else await modelGatewayApi.disableRoute(route.id)
-  ElMessage.success(route.status === 'active' ? '平台模型已停用' : '平台模型已启用')
+  ElMessage.success(route.status === 'active' ? '模型已停用' : '模型已启用')
   await loadAll()
 }
 
@@ -359,7 +358,7 @@ function routeName(routeId: number | null) {
 
 async function resetPlatformQuota(route: ModelRoute) {
   await modelGatewayApi.resetQuota(route.id)
-  ElMessage.success('平台模型额度已重置')
+  ElMessage.success('模型额度已重置')
   await loadAll()
 }
 
@@ -383,7 +382,7 @@ onMounted(async () => {
           />
         </div>
         <el-button :icon="Refresh" @click="loadAll">刷新</el-button>
-        <el-button v-if="authStore.isAdmin" type="warning" :icon="Plus" @click="openPlatformCreate">新增平台模型</el-button>
+        <el-button type="primary" :icon="Plus" @click="openPlatformCreate">新增模型</el-button>
       </div>
     </div>
 
@@ -397,8 +396,8 @@ onMounted(async () => {
 
     <section class="gateway-section">
       <el-tabs v-model="activeTab" class="gateway-tabs">
-        <el-tab-pane label="平台模型" name="routes">
-          <el-table :data="displayRoutes" empty-text="暂无可用平台模型">
+        <el-tab-pane label="模型配置" name="routes">
+          <el-table :data="displayRoutes" empty-text="暂无模型配置">
             <el-table-column label="模型节点" min-width="200">
               <template #default="{ row }">
                 <div class="route-name"><strong>{{ row.name }}</strong><span>{{ row.provider }}</span></div>
@@ -408,7 +407,7 @@ onMounted(async () => {
             <el-table-column label="API 协议" min-width="155">
               <template #default="{ row }">{{ protocolLabel(row.api_protocol, row.detected_api_protocol) }}</template>
             </el-table-column>
-            <el-table-column v-if="authStore.isAdmin" prop="base_url" label="模型地址" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="base_url" label="模型地址" min-width="240" show-overflow-tooltip />
             <el-table-column label="API Token" width="105">
               <template #default="{ row }"><el-tag :type="row.credential_configured ? 'success' : 'info'">{{ row.credential_configured ? '已配置' : '未配置' }}</el-tag></template>
             </el-table-column>
@@ -427,12 +426,14 @@ onMounted(async () => {
             <el-table-column label="状态" width="90">
               <template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag></template>
             </el-table-column>
-            <el-table-column v-if="authStore.isAdmin" label="操作" width="330" fixed="right" align="right">
+            <el-table-column label="操作" width="330" fixed="right" align="right">
               <template #default="{ row }">
-                <el-button text type="primary" :icon="Connection" :loading="testingPlatformRouteId === row.id" @click="testPlatformRoute(row)">真实验证</el-button>
-                <el-button text :icon="EditPen" @click="openPlatformEdit(row)">编辑</el-button>
-                <el-button text :icon="Refresh" @click="resetPlatformQuota(row)">重置额度</el-button>
-                <el-button text :type="row.status === 'active' ? 'danger' : 'success'" :icon="row.status === 'active' ? VideoPause : VideoPlay" @click="togglePlatformRoute(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button>
+                <template v-if="row.can_manage">
+                  <el-button text type="primary" :icon="Connection" :loading="testingPlatformRouteId === row.id" @click="testPlatformRoute(row)">真实验证</el-button>
+                  <el-button text :icon="EditPen" @click="openPlatformEdit(row)">编辑</el-button>
+                  <el-button text :icon="Refresh" @click="resetPlatformQuota(row)">重置额度</el-button>
+                  <el-button text :type="row.status === 'active' ? 'danger' : 'success'" :icon="row.status === 'active' ? VideoPause : VideoPlay" @click="togglePlatformRoute(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button>
+                </template>
               </template>
             </el-table-column>
           </el-table>
@@ -506,7 +507,7 @@ onMounted(async () => {
       </el-tabs>
     </section>
 
-    <el-dialog v-if="authStore.isAdmin" v-model="showPlatformDialog" :title="editingPlatformRouteId ? '编辑平台模型' : '新增平台模型'" width="680px" destroy-on-close>
+    <el-dialog v-model="showPlatformDialog" :title="editingPlatformRouteId ? '编辑模型' : '新增模型'" width="680px" destroy-on-close>
       <el-form label-position="top">
         <div class="form-grid">
           <el-form-item label="节点名称" required><el-input v-model="platformForm.name" maxlength="120" placeholder="例如：GLM 主节点" /></el-form-item>
@@ -516,7 +517,6 @@ onMounted(async () => {
         <el-form-item label="模型地址" required><el-input v-model="platformForm.base_url" maxlength="500" placeholder="例如：https://example.com/v1" /></el-form-item>
         <el-form-item label="API 协议" required>
           <el-select v-model="platformForm.api_protocol" style="width: 100%">
-            <el-option label="自动识别（真实验证时检测）" value="auto" />
             <el-option label="OpenAI Chat Completions" value="chat_completions" />
             <el-option label="OpenAI Responses API" value="responses" />
           </el-select>
@@ -525,12 +525,13 @@ onMounted(async () => {
         <el-form-item label="适用 Agent">
           <el-checkbox-group v-model="platformForm.agent_types">
             <el-checkbox value="requirement_clarification">需求澄清 Agent</el-checkbox>
+            <el-checkbox value="development_document">开发文档 Agent</el-checkbox>
             <el-checkbox value="development">开发 Agent</el-checkbox>
           </el-checkbox-group>
           <div class="field-hint">不选择表示该模型对所有主 Agent 可用。</div>
         </el-form-item>
         <div class="form-grid">
-          <el-form-item label="平台优先级"><el-input-number v-model="platformForm.priority" :min="1" :max="1000" controls-position="right" /></el-form-item>
+          <el-form-item label="模型优先级"><el-input-number v-model="platformForm.priority" :min="1" :max="1000" controls-position="right" /></el-form-item>
           <el-form-item label="节点 Token 额度"><el-input-number v-model="platformForm.quota_limit" :min="1" controls-position="right" /></el-form-item>
         </div>
       </el-form>

@@ -10,6 +10,7 @@ from dagent.api.v1 import api_router
 from dagent.config import get_settings
 from dagent.db.session import close_db, init_db, seed_demo_data
 from dagent.services.agent_runtime import AgentRuntime
+from dagent.services.requirement_runtime import RequirementRuntimeOrchestrator
 
 
 @asynccontextmanager
@@ -20,9 +21,13 @@ async def lifespan(app: FastAPI):
     if settings.SEED_DEMO_DATA:
         await seed_demo_data()
     runtime = AgentRuntime(settings)
+    requirement_runtime = RequirementRuntimeOrchestrator(settings)
     await runtime.start()
+    await requirement_runtime.start()
     app.state.agent_runtime = runtime
+    app.state.requirement_runtime = requirement_runtime
     yield
+    await requirement_runtime.stop()
     await runtime.stop()
     await close_db()
 

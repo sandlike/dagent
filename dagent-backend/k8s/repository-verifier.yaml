@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dagent-repository-verifier
+  namespace: dagent
+  labels:
+    app.kubernetes.io/name: dagent-repository-verifier
+    app.kubernetes.io/part-of: dagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dagent-repository-verifier
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dagent-repository-verifier
+        app.kubernetes.io/part-of: dagent
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: opencode-pull-secret
+      containers:
+        - name: workspace-manager
+          image: registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - /opt/dagent/workspace-manager.mjs
+          envFrom:
+            - secretRef:
+                name: dagent-agent-callback
+          env:
+            - name: WORKSPACE_ROOT
+              value: /workspaces
+            - name: WORKSPACE_MANAGER_PORT
+              value: "8090"
+          ports:
+            - name: workspace
+              containerPort: 8090
+          startupProbe:
+            httpGet:
+              path: /health
+              port: workspace
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: workspace
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: workspace
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 250m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: workspace-manager
+              mountPath: /opt/dagent
+              readOnly: true
+            - name: workspaces
+              mountPath: /workspaces
+      volumes:
+        - name: workspace-manager
+          configMap:
+            name: dagent-workspace-manager
+            defaultMode: 0555
+        - name: workspaces
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dagent-repository-verifier
+  namespace: dagent
+  labels:
+    app.kubernetes.io/name: dagent-repository-verifier
+    app.kubernetes.io/part-of: dagent
+spec:
+  selector:
+    app.kubernetes.io/name: dagent-repository-verifier
+  ports:
+    - name: workspace
+      port: 8090
+      targetPort: workspace

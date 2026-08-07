@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
   Check,
   Close,
+  Delete,
   Edit,
   MoreFilled,
   Refresh,
@@ -17,6 +18,7 @@ import type {
   AgentTask,
   ArtifactSummary,
   ArtifactVersion,
+  ClarificationQuestion,
   ClarificationRound,
   PipelineDetail,
   ReviewGate,
@@ -48,6 +50,9 @@ const projectStore = useProjectStore()
 const requirementStore = useRequirementStore()
 const requirementId = computed(() => Number(route.params.id))
 const requirement = computed(() => requirementStore.currentRequirement)
+const canDeleteRequirement = computed(() =>
+  Boolean(authStore.user?.roles.some((role) => ['admin', 'pm'].includes(role))),
+)
 const loading = ref(false)
 const pipeline = ref<PipelineDetail | null>(null)
 const actions = ref<string[]>([])
@@ -63,6 +68,8 @@ const workspaceBusy = ref<number | null>(null)
 const selectedArtifactType = ref('')
 const selectedArtifactVersionNumber = ref<number | null>(null)
 const answerValues = reactive<Record<number, unknown>>({})
+const answerCustom = reactive<Record<number, string>>({})
+const OTHER_ANSWER = '__other__'
 const showClarificationConfirm = ref(false)
 const clarificationSummary = ref('')
 const showReviewDialog = ref(false)
@@ -149,6 +156,10 @@ const reviewActionLabels = {
   transfer: '转交',
 } as const
 
+function validRequirementId(value: number) {
+  return Number.isInteger(value) && value > 0
+}
+
 const artifactSourceLabels: Record<string, string> = {
   user: '用户提交',
   agent: 'Agent 生成',
@@ -160,10 +171,11 @@ function hasAction(action: string) {
   return actions.value.includes(action)
 }
 
-async function loadAll(showLoading = true) {
+async function loadAll(showLoading = true, id = requirementId.value) {
+  if (!validRequirementId(id)) return
   if (showLoading) loading.value = true
   try {
-    const current = await requirementStore.fetchDetail(requirementId.value)
+    const current = await requirementStore.fetchDetail(id)
     const [
       pipelineResponse,
       actionResponse,
@@ -266,6 +278,9 @@ function openEditDialog() {
 
 async function saveDraft() {
   if (!requirement.value) return
+  const startNewClarification =
+    requirement.value.stage === 'requirement_clarification'
+    && latestClarificationRound.value?.status === 'confirmed'
   await requirementApi.update(requirement.value.id, {
     ...editForm,
     priority: editForm.priority as 'P0' | 'P1' | 'P2' | 'P3',
@@ -273,8 +288,13 @@ async function saveDraft() {
     resource_version: requirement.value.version,
   })
   showEditDialog.value = false
-  ElMessage.success('草稿已保存')
-  await loadAll()
+  ElMessage.success('需求已更新')
+  await loadAll(false)
+  if (startNewClarification && requirement.value) {
+    await requirementApi.generateClarification(requirement.value.id)
+    ElMessage.success('已根据修改后的需求发起新一轮澄清')
+    await loadAll()
+  }
 }
 
 async function generateClarification() {
@@ -296,20 +316,99 @@ async function generateClarification() {
 
 async function reopenClarification() {
   if (!requirement.value) return
+  await ElMessageBox.confirm('之前填写的本轮答案会被清除，确认重新回答？', '重新回答本轮问题', {
+    type: 'warning',
+    confirmButtonText: '重新回答',
+    cancelButtonText: '取消',
+  })
   await requirementApi.reopenClarification(requirement.value.id, requirement.value.version)
+  clearClarificationAnswers()
   ElMessage.success('已返回本轮澄清问题，可重新填写答案')
   await loadAll()
 }
 
-function isMissingAnswer(questionId: number) {
-  const value = answerValues[questionId]
-  return value === undefined || value === '' || (Array.isArray(value) && value.length === 0)
+function clearClarificationAnswers() {
+  Object.keys(answerValues).forEach((key) => delete answerValues[Number(key)])
+  Object.keys(answerCustom).forEach((key) => delete answerCustom[Number(key)])
+}
+
+async function continueClarification() {
+  await ElMessageBox.confirm('将根据本轮答案继续生成下一轮问题，确认继续？', '继续澄清', {
+    type: 'info',
+    confirmButtonText: '继续澄清',
+    cancelButtonText: '取消',
+  })
+  await generateClarification()
+}
+
+function isOtherSelected(question: ClarificationQuestion) {
+  const value = answerValues[question.id]
+  return question.type === 'single'
+    ? value === OTHER_ANSWER
+    : Array.isArray(value) && value.includes(OTHER_ANSWER)
+}
+
+function isMissingAnswer(question: ClarificationQuestion) {
+  const value = answerValues[question.id]
+  if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) return true
+  return isOtherSelected(question) && !(answerCustom[question.id] || '').trim()
+}
+
+function resolvedAnswer(question: ClarificationQuestion) {
+  const value = answerValues[question.id]
+  const custom = (answerCustom[question.id] || '').trim()
+  if (question.type === 'single') return value === OTHER_ANSWER ? custom : value
+  if (question.type === 'multiple' && Array.isArray(value)) {
+    return value.map((item) => (item === OTHER_ANSWER ? custom : item))
+  }
+  return value
+}
+
+function resolveAnswerDisplay(question: ClarificationQuestion, answer: unknown) {
+  if (answer === undefined || answer === null || answer === '') return '未作答'
+  let parsed = answer
+  if (typeof answer === 'string') {
+    try {
+      parsed = JSON.parse(answer)
+    } catch {
+      parsed = answer
+    }
+  }
+  const optionText = (value: unknown) => {
+    const option = question.options.find((item) => item.id === String(value))
+    if (!option) return String(value)
+    return option.description ? `${option.label}（${option.description}）` : option.label
+  }
+  return Array.isArray(parsed) ? parsed.map(optionText).join('、') : optionText(parsed)
+}
+
+function buildClarificationSummary() {
+  if (!requirement.value) return ''
+  const sections = clarificationRounds.value
+    .filter((round) => round.questions.some((question) => question.answers.length))
+    .map((round) => {
+      const questions = round.questions
+        .filter((question) => question.answers.length)
+        .map((question, index) => {
+          const recommendation = question.ai_recommendation
+            ? `\n- AI 建议：${question.ai_recommendation}`
+            : ''
+          return `**Q${index + 1}：${question.question}**${recommendation}\n- 回答：${resolveAnswerDisplay(question, question.answers.at(-1)?.answer)}`
+        })
+      return `### 第 ${round.round_no} 轮\n\n${questions.join('\n\n')}`
+    })
+  return `# ${requirement.value.title}\n\n${requirement.value.description}\n\n---\n\n## 澄清问答\n\n${sections.join('\n\n')}`
+}
+
+function openClarificationConfirm() {
+  clarificationSummary.value = buildClarificationSummary()
+  showClarificationConfirm.value = true
 }
 
 async function submitClarificationAnswers() {
   if (!requirement.value || !latestClarificationRound.value) return
   const requiredMissing = latestClarificationRound.value.questions.filter(
-    (question) => question.required && isMissingAnswer(question.id),
+    (question) => question.required && isMissingAnswer(question),
   )
   if (requiredMissing.length) {
     ElMessage.warning('请回答全部必答问题')
@@ -318,13 +417,12 @@ async function submitClarificationAnswers() {
   const response = await requirementApi.submitAnswers(requirement.value.id, {
     resource_version: requirement.value.version,
     answers: latestClarificationRound.value.questions
-      .filter((question) => !isMissingAnswer(question.id))
-      .map((question) => ({ question_id: question.id, answer: answerValues[question.id] })),
+      .filter((question) => !isMissingAnswer(question))
+      .map((question) => ({ question_id: question.id, answer: resolvedAnswer(question) })),
   })
   requirement.value.version = response.data.resource_version
-  clarificationSummary.value = requirement.value.description
-  showClarificationConfirm.value = true
   await loadAll(false)
+  openClarificationConfirm()
 }
 
 async function confirmClarification() {
@@ -342,10 +440,6 @@ async function confirmClarification() {
     title: requirement.value.title,
     description: requirement.value.description,
     clarification_summary: clarificationSummary.value,
-    confirmed_answers: latestClarificationRound.value?.questions.map((question) => ({
-      question: question.question,
-      answer: question.answers.at(-1)?.answer,
-    })),
   })
   showClarificationConfirm.value = false
   ElMessage.success('澄清结果已确认')
@@ -387,6 +481,25 @@ async function cancelTask(task: AgentTask) {
   await loadAll()
 }
 
+async function deleteRequirement() {
+  if (!requirement.value) return
+  const workspaceAction = requirement.value.workspace_retention_policy === 'delete'
+    ? '同时删除该需求的 Workspace'
+    : '保留该需求的 Workspace'
+  await ElMessageBox.confirm(
+    `需求会从列表隐藏并立即停止专属 Agent Pod；数据库中的需求、结果、任务日志和审计日志会保留。当前策略：${workspaceAction}。`,
+    '删除需求',
+    {
+      type: 'warning',
+      confirmButtonText: '删除需求',
+      cancelButtonText: '返回',
+    },
+  )
+  await requirementApi.delete(requirement.value.id, requirement.value.version)
+  ElMessage.success('需求已删除，专属 Agent Pod 正在回收')
+  router.push('/requirements')
+}
+
 async function retryTask(task: AgentTask) {
   await requirementApi.retryTask(task.id)
   ElMessage.success('已从检查点创建重试任务')
@@ -396,6 +509,23 @@ async function retryTask(task: AgentTask) {
 function stopLogPolling() {
   window.clearInterval(logPollTimer)
   logPollTimer = undefined
+}
+
+function stopBackgroundUpdates() {
+  eventController?.abort()
+  eventController = undefined
+  window.clearInterval(pollTimer)
+  pollTimer = undefined
+  stopLogPolling()
+}
+
+function startBackgroundUpdates(id: number) {
+  if (!validRequirementId(id)) return
+  eventController = new AbortController()
+  void requirementApi
+    .streamEvents(id, () => void loadAll(false, id), eventController.signal)
+    .catch(() => undefined)
+  pollTimer = window.setInterval(() => void loadAll(false, id), 8000)
 }
 
 async function refreshTaskLogs(taskId: number) {
@@ -558,27 +688,24 @@ async function reviseArtifact() {
   await loadAll()
 }
 
-function contentAsText(content: unknown) {
-  return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
-}
-
 function formatTime(value: string | null) {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 }
 
 onMounted(async () => {
-  await loadAll()
-  eventController = new AbortController()
-  void requirementApi
-    .streamEvents(requirementId.value, () => void loadAll(false), eventController.signal)
-    .catch(() => undefined)
-  pollTimer = window.setInterval(() => loadAll(false), 8000)
+  const id = requirementId.value
+  await loadAll(true, id)
+  startBackgroundUpdates(id)
 })
-onUnmounted(() => {
-  eventController?.abort()
-  window.clearInterval(pollTimer)
-  window.clearInterval(logPollTimer)
+watch(requirementId, async (id, previousId) => {
+  if (id === previousId) return
+  stopBackgroundUpdates()
+  if (!validRequirementId(id)) return
+  await loadAll(true, id)
+  startBackgroundUpdates(id)
 })
+onBeforeRouteLeave(stopBackgroundUpdates)
+onUnmounted(stopBackgroundUpdates)
 </script>
 
 <template>
@@ -604,9 +731,14 @@ onUnmounted(() => {
         <el-button v-if="hasAction('submit')" type="primary" :icon="Check" @click="submitRequirement">提交需求</el-button>
         <el-button v-if="hasAction('pause')" :icon="VideoPause" @click="pauseRequirement">暂停</el-button>
         <el-button v-if="hasAction('resume')" type="primary" :icon="VideoPlay" @click="resumeRequirement">恢复</el-button>
-        <el-dropdown v-if="requirement.stage !== 'completed' && requirement.run_status !== 'cancelled'">
+        <el-dropdown v-if="canDeleteRequirement || (requirement.stage !== 'completed' && requirement.run_status !== 'cancelled')">
           <el-button :icon="MoreFilled" circle aria-label="更多操作" />
-          <template #dropdown><el-dropdown-menu><el-dropdown-item @click="cancelRequirement">取消需求</el-dropdown-item></el-dropdown-menu></template>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="requirement.stage !== 'completed' && requirement.run_status !== 'cancelled'" @click="cancelRequirement">取消需求</el-dropdown-item>
+              <el-dropdown-item v-if="canDeleteRequirement" :icon="Delete" divided @click="deleteRequirement">删除需求</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
         </el-dropdown>
       </div>
     </div>
@@ -638,20 +770,34 @@ onUnmounted(() => {
                 <div class="question-title"><span v-if="question.required">*</span>{{ question.question }}</div>
                 <div v-if="question.ai_recommendation" class="recommendation">AI 建议：{{ question.ai_recommendation }}</div>
                 <template v-if="latestClarificationRound.status === 'pending_answers'">
-                  <el-radio-group v-if="question.type === 'single' && question.options.length" v-model="answerValues[question.id]">
-                    <el-radio v-for="option in question.options" :key="option.id" :value="option.id">{{ option.label }}</el-radio>
-                  </el-radio-group>
-                  <el-checkbox-group v-else-if="question.type === 'multiple'" v-model="answerValues[question.id] as string[]">
-                    <el-checkbox v-for="option in question.options" :key="option.id" :value="option.id">{{ option.label }}</el-checkbox>
-                  </el-checkbox-group>
+                  <template v-if="question.type === 'single' && question.options.length">
+                    <el-radio-group v-model="answerValues[question.id]">
+                      <el-radio v-for="option in question.options" :key="option.id" :value="option.id">{{ option.label }}</el-radio>
+                      <el-radio :value="OTHER_ANSWER">其他（手动输入）</el-radio>
+                    </el-radio-group>
+                    <el-input v-if="isOtherSelected(question)" v-model="answerCustom[question.id]" class="custom-answer" type="textarea" :rows="3" placeholder="请输入其他回答" />
+                  </template>
+                  <template v-else-if="question.type === 'multiple'">
+                    <el-checkbox-group v-model="answerValues[question.id] as string[]">
+                      <el-checkbox v-for="option in question.options" :key="option.id" :value="option.id">{{ option.label }}</el-checkbox>
+                      <el-checkbox :value="OTHER_ANSWER">其他（手动输入）</el-checkbox>
+                    </el-checkbox-group>
+                    <el-input v-if="isOtherSelected(question)" v-model="answerCustom[question.id]" class="custom-answer" type="textarea" :rows="3" placeholder="请输入其他回答" />
+                  </template>
                   <el-input v-else v-model="answerValues[question.id] as string" type="textarea" :rows="3" placeholder="请输入回答" />
                 </template>
-                <div v-else class="answer-readonly">{{ contentAsText(question.answers.at(-1)?.answer) }}</div>
+                <div v-else class="answer-readonly">{{ resolveAnswerDisplay(question, question.answers.at(-1)?.answer) }}</div>
               </div>
               <el-button v-if="latestClarificationRound.status === 'pending_answers' && hasAction('answer_clarification')" type="primary" @click="submitClarificationAnswers">提交本轮答案</el-button>
-              <el-button v-else-if="latestClarificationRound.status === 'answered' && hasAction('confirm_clarification')" type="primary" @click="clarificationSummary = requirement.description; showClarificationConfirm = true">确认澄清完成</el-button>
-              <el-button v-else-if="latestClarificationRound.status === 'confirmed' && hasAction('reopen_clarification')" @click="reopenClarification">重新回答本轮问题</el-button>
-              <el-button v-if="latestClarificationRound.status === 'confirmed' && hasAction('generate_clarification')" type="primary" :loading="taskStarting" :disabled="hasActiveTask" @click="generateClarification">根据驳回意见生成新一轮澄清问题</el-button>
+              <template v-else-if="latestClarificationRound.status === 'answered'">
+                <el-button v-if="hasAction('confirm_clarification')" type="primary" @click="openClarificationConfirm">确认澄清完成</el-button>
+                <el-button v-if="hasAction('generate_clarification')" :loading="taskStarting" :disabled="hasActiveTask" @click="continueClarification">继续澄清</el-button>
+              </template>
+              <template v-else-if="latestClarificationRound.status === 'confirmed'">
+                <el-button v-if="hasAction('reopen_clarification')" @click="reopenClarification">重新回答本轮问题</el-button>
+                <el-button v-if="hasAction('generate_clarification')" type="primary" :loading="taskStarting" :disabled="hasActiveTask" @click="generateClarification">根据驳回意见生成新一轮澄清问题</el-button>
+                <el-button v-if="hasAction('edit')" :icon="Edit" @click="openEditDialog">修改需求描述</el-button>
+              </template>
             </div>
             <div v-else class="empty-action">
               <el-empty description="尚未生成澄清问题" :image-size="70" />
@@ -776,10 +922,10 @@ onUnmounted(() => {
       <template #footer><el-button @click="showEditDialog = false">取消</el-button><el-button type="primary" @click="saveDraft">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="showClarificationConfirm" title="确认澄清结果" width="620px">
+    <el-dialog v-model="showClarificationConfirm" title="确认需求文档" width="680px">
       <el-alert title="确认后将进入开发文档生成，后续修改需要形成新产物版本。" type="warning" show-icon :closable="false" />
-      <el-input v-model="clarificationSummary" type="textarea" :rows="10" style="margin-top: 16px" />
-      <template #footer><el-button @click="showClarificationConfirm = false">继续澄清</el-button><el-button type="primary" @click="confirmClarification">确认完成</el-button></template>
+      <div class="confirm-doc-preview"><MarkdownRenderer :content="clarificationSummary" /></div>
+      <template #footer><el-button @click="showClarificationConfirm = false">取消</el-button><el-button type="primary" @click="confirmClarification">确认完成</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="showReviewDialog" :title="`${currentGate ? gateLabels[currentGate.gate] : ''}${reviewAction === 'approve' ? '通过' : reviewAction === 'reject' ? '驳回' : '转交'}`" width="520px">
@@ -832,6 +978,7 @@ onUnmounted(() => {
 .question-title { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
 .question-title > span { color: #d64545; margin-right: 4px; }
 .recommendation { color: #52708b; font-size: 12px; margin-bottom: 10px; }
+.custom-answer { margin-top: 8px; }
 .answer-readonly { padding: 10px; white-space: pre-wrap; background: #fff; border: 1px solid #e2e6ea; color: #3e4753; font-size: 13px; }
 .empty-action { display: flex; flex-direction: column; align-items: center; }
 .artifact-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 300px; }
@@ -860,6 +1007,7 @@ onUnmounted(() => {
 .review-list strong { font-size: 13px; }
 .review-list p { margin: 7px 0; color: #626c79; font-size: 12px; line-height: 1.5; }
 .edit-grid { display: grid; grid-template-columns: 160px 1fr; gap: 16px; }
+.confirm-doc-preview { max-height: 420px; overflow-y: auto; margin-top: 16px; padding: 16px; background: #f8f9fb; border: 1px solid #e5e8ec; border-radius: 4px; }
 @media (max-width: 1120px) { .content-grid { grid-template-columns: 1fr; } .stage-track { overflow-x: auto; } }
 @media (max-width: 720px) { .page-heading { align-items: flex-start; flex-direction: column; } .artifact-layout { grid-template-columns: 1fr; } .artifact-nav { border-right: 0; border-bottom: 1px solid #e5e8ec; display: flex; overflow-x: auto; } .artifact-nav button { min-width: 150px; } }
 </style>

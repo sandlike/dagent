@@ -9,6 +9,7 @@ from dagent.api.schemas.common import ORMModel
 
 RoleCode = Literal["admin", "pm", "developer", "qa"]
 PriorityCode = Literal["P0", "P1", "P2", "P3"]
+WorkspaceRetentionPolicy = Literal["retain", "delete"]
 ReviewGate = Literal["development_document", "development_report", "test_plan", "final_acceptance"]
 
 
@@ -118,7 +119,9 @@ class RequirementCreate(BaseModel):
     priority: PriorityCode = "P2"
     repository_ids: list[int] = Field(default_factory=list)
     requirement_agent_version_id: int | None = None
+    development_document_agent_version_id: int | None = None
     development_agent_version_id: int | None = None
+    workspace_retention_policy: WorkspaceRetentionPolicy = "retain"
 
 
 class RequirementUpdate(BaseModel):
@@ -127,7 +130,9 @@ class RequirementUpdate(BaseModel):
     priority: PriorityCode | None = None
     repository_ids: list[int] | None = None
     requirement_agent_version_id: int | None = None
+    development_document_agent_version_id: int | None = None
     development_agent_version_id: int | None = None
+    workspace_retention_policy: WorkspaceRetentionPolicy | None = None
     resource_version: int = Field(ge=1)
 
 
@@ -143,11 +148,14 @@ class RequirementRead(ORMModel):
     created_by: int
     assignee_id: int | None
     requirement_agent_version_id: int | None
+    development_document_agent_version_id: int | None
     development_agent_version_id: int | None
+    workspace_retention_policy: WorkspaceRetentionPolicy
     repository_ids: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    deleted_at: datetime | None
 
 
 class ResourceVersionRequest(BaseModel):

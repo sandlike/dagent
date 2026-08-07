@@ -112,10 +112,15 @@ class Requirement(Base, TimestampMixin):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     requirement_agent_version_id: Mapped[int | None] = mapped_column(ForeignKey("agent_versions.id"), nullable=True)
+    development_document_agent_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_versions.id"), nullable=True
+    )
     development_agent_version_id: Mapped[int | None] = mapped_column(ForeignKey("agent_versions.id"), nullable=True)
     testing_agent_version_id: Mapped[int | None] = mapped_column(ForeignKey("agent_versions.id"), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    workspace_retention_policy: Mapped[str] = mapped_column(String(20), default="retain")
     create_idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
 
 
@@ -275,6 +280,7 @@ class AgentDefinition(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     role_type: Mapped[str] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(20), default="active")
@@ -364,6 +370,7 @@ class ModelRoute(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
     provider: Mapped[str] = mapped_column(String(50))
     model: Mapped[str] = mapped_column(String(160))

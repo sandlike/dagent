@@ -98,6 +98,9 @@ def _upgrade_existing_schema(connection) -> None:
 
     if "model_routes" in tables:
         model_route_columns = {column["name"] for column in inspector.get_columns("model_routes")}
+        if "owner_user_id" not in model_route_columns:
+            connection.execute(text("ALTER TABLE model_routes ADD COLUMN owner_user_id INTEGER NULL"))
+            connection.execute(text("CREATE INDEX ix_model_routes_owner_user_id ON model_routes (owner_user_id)"))
         if "api_protocol" not in model_route_columns:
             connection.execute(
                 text(
@@ -109,6 +112,14 @@ def _upgrade_existing_schema(connection) -> None:
             connection.execute(text("ALTER TABLE model_routes ADD COLUMN detected_api_protocol VARCHAR(30) NULL"))
         if "credential_ciphertext" not in model_route_columns:
             connection.execute(text("ALTER TABLE model_routes ADD COLUMN credential_ciphertext TEXT NULL"))
+
+    if "agent_definitions" in tables:
+        agent_definition_columns = {column["name"] for column in inspector.get_columns("agent_definitions")}
+        if "owner_user_id" not in agent_definition_columns:
+            connection.execute(text("ALTER TABLE agent_definitions ADD COLUMN owner_user_id INTEGER NULL"))
+            connection.execute(
+                text("CREATE INDEX ix_agent_definitions_owner_user_id ON agent_definitions (owner_user_id)")
+            )
 
     if "model_call_logs" in tables:
         log_columns = {column["name"] for column in inspector.get_columns("model_call_logs")}
@@ -167,8 +178,25 @@ def _upgrade_existing_schema(connection) -> None:
 
     if "requirements" in tables:
         requirement_columns = {column["name"] for column in inspector.get_columns("requirements")}
+        if "development_document_agent_version_id" not in requirement_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE requirements ADD COLUMN "
+                    "development_document_agent_version_id INTEGER NULL"
+                )
+            )
         if "testing_agent_version_id" not in requirement_columns:
             connection.execute(text("ALTER TABLE requirements ADD COLUMN testing_agent_version_id INTEGER NULL"))
+        if "deleted_at" not in requirement_columns:
+            connection.execute(text("ALTER TABLE requirements ADD COLUMN deleted_at DATETIME NULL"))
+            connection.execute(text("CREATE INDEX ix_requirements_deleted_at ON requirements (deleted_at)"))
+        if "workspace_retention_policy" not in requirement_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE requirements ADD COLUMN workspace_retention_policy "
+                    "VARCHAR(20) NOT NULL DEFAULT 'retain'"
+                )
+            )
         connection.execute(
             text(
                 "UPDATE requirements SET stage = 'final_acceptance', run_status = 'waiting_human', "
@@ -208,6 +236,34 @@ async def seed_demo_data() -> None:
                 if tool_policy.get("shell") == "allowlist":
                     tool_policy["shell"] = True
                     version.tool_policy = tool_policy
+            for tenant in existing_tenants:
+                document_agent = await session.scalar(
+                    select(AgentDefinition).where(
+                        AgentDefinition.tenant_id == tenant.id,
+                        AgentDefinition.owner_user_id.is_(None),
+                        AgentDefinition.role_type == "development_document",
+                    )
+                )
+                if document_agent is None:
+                    document_agent = AgentDefinition(
+                        tenant_id=tenant.id,
+                        role_type="development_document",
+                        name="Development document - balanced",
+                        default_flag=True,
+                    )
+                    session.add(document_agent)
+                    await session.flush()
+                    session.add(
+                        AgentVersion(
+                            agent_id=document_agent.id,
+                            version=1,
+                            style="balanced",
+                            prompt_ref="builtin://development-document/v1",
+                            skill_policy=["dev-plan", "codebase-impact-analysis", "acceptance-criteria"],
+                            mcp_policy={"serena": {"access": "semantic_read_only"}},
+                            tool_policy={"repository": "read_only", "shell": False},
+                        )
+                    )
             await session.commit()
             return
 
@@ -243,7 +299,13 @@ async def seed_demo_data() -> None:
             name="Development - balanced",
             default_flag=True,
         )
-        session.add_all([requirement_agent, development_agent])
+        development_document_agent = AgentDefinition(
+            tenant_id=tenant.id,
+            role_type="development_document",
+            name="Development document - balanced",
+            default_flag=True,
+        )
+        session.add_all([requirement_agent, development_document_agent, development_agent])
         await session.flush()
         session.add_all(
             [
@@ -252,7 +314,22 @@ async def seed_demo_data() -> None:
                     version=1,
                     style="balanced",
                     prompt_ref="builtin://requirement-clarification/v1",
-                    skill_policy=["requirement-elicitation", "codebase-impact-analysis", "acceptance-criteria"],
+                    skill_policy=[
+                        "grill-me",
+                        "requirement-elicitation",
+                        "codebase-impact-analysis",
+                        "acceptance-criteria",
+                    ],
+                    mcp_policy={"serena": {"access": "semantic_read_only"}},
+                    tool_policy={"repository": "read_only", "shell": False},
+                ),
+                AgentVersion(
+                    agent_id=development_document_agent.id,
+                    version=1,
+                    style="balanced",
+                    prompt_ref="builtin://development-document/v1",
+                    skill_policy=["dev-plan", "codebase-impact-analysis", "acceptance-criteria"],
+                    mcp_policy={"serena": {"access": "semantic_read_only"}},
                     tool_policy={"repository": "read_only", "shell": False},
                 ),
                 AgentVersion(
@@ -260,7 +337,8 @@ async def seed_demo_data() -> None:
                     version=1,
                     style="balanced",
                     prompt_ref="builtin://development/v1",
-                    skill_policy=["implementation-planning", "code-change", "code-review", "test-design"],
+                    skill_policy=["dev-plan", "implementation-planning", "code-change", "code-review", "test-design"],
+                    mcp_policy={"serena": {"access": "semantic_read_only"}},
                     tool_policy={"workspace": "requirement_scoped", "shell": True},
                 ),
             ]

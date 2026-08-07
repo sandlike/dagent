@@ -2,9 +2,9 @@ import client from './client'
 import type {
   ApiResponse,
   ModelCallLog,
+  ConfiguredModelApiProtocol,
   ModelFallbackError,
   ModelRoute,
-  ModelApiProtocol,
   ModelUsage,
   Page,
   ProjectModelRoute,
@@ -20,7 +20,7 @@ export interface ModelRouteInput {
   provider: string
   model: string
   base_url: string
-  api_protocol: ModelApiProtocol
+  api_protocol: ConfiguredModelApiProtocol
   priority: number
   quota_limit: number
   timeout_ms: number
