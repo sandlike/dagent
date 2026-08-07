@@ -1,4 +1,4 @@
-ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-python:3.11-slim-bookworm
+ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.11-slim-bookworm
 
 FROM ${PYTHON_IMAGE} AS builder
 

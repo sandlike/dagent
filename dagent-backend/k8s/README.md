@@ -1,64 +1,76 @@
 # Dagent Kubernetes deployment
 
-The deployment uses one persistent runtime Pod per non-terminal requirement.
+All application code is built into versioned Docker images before deployment. Kubernetes
+only pulls and starts images; it does not unpack source or frontend tarballs and it does
+not build images inside the cluster.
+
+## Images
+
+The project uses one Alibaba Cloud repository with component-specific tags:
 
 ```text
-create requirement
--> backend creates Deployment + Service + dedicated PVC
--> initContainer prepares isolated state directories and runtime credentials
--> three Agent containers and workspace-manager start
--> requirement waits, runs, or waits for approval without losing the Pod
--> completion, cancellation, or deletion removes Deployment and Service
--> PVC is retained or deleted according to workspace_retention_policy
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:backend-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:web-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:agent-runtime-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:requirement-clarification-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:development-document-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:development-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:workspace-manager-v1.0.0
+registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:cloudflared-e39ee8da81ad
 ```
 
-Each requirement Pod contains four independent containers:
+`cloudflared` is a pinned third-party image mirrored into the same repository. The other
+seven images are built from this project and the sibling `dagent-web` repository.
 
-- `requirement-clarification` on port `4096`: Wang Tianyou's clarification behavior with `grill-me`
-- `development-document` on port `4097`: Wang Tianyou's grounded development-plan behavior with `dev-plan`
-- `development` on port `4098`: repository implementation and focused checks
-- `workspace-manager` on port `8090`: requirement Workspace preparation and Git operations
+## Build and push
 
-Each Agent has its own image, OpenCode process, configuration, Skill, password, port,
-and state directory. Clarification and development-document mount the requirement
-Workspace read-only; development and workspace-manager can write it. The containers
-share only their requirement's Pod and PVC and cannot mount another requirement's
-Workspace. A NetworkPolicy allows inbound Agent/workspace traffic only from
-`dagent-backend`. Agent results and logs are persisted by the backend before the runtime
-is removed. Deleting a runtime never deletes requirement, result, task-log, or audit rows
-from MySQL.
-
-The three local image projects are:
-
-- `k8s/agent/images/requirement-clarification`
-- `k8s/agent/images/development-document`
-- `k8s/agent/images/development`
-
-They build these registry images:
-
-- `registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-requirement-clarification:1.0.1`
-- `registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-development-document:1.0.1`
-- `registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent-development:1.0.1`
-
-No image is built when a requirement is created. If local Docker is unavailable, create
-the three versioned build-context ConfigMaps and let the Kaniko Jobs build them in K8s:
+Log in without putting the password in the command history:
 
 ```powershell
-kubectl -n dagent create configmap dagent-requirement-clarification-image-v2 `
-  --from-file=k8s/agent/images/requirement-clarification
-kubectl -n dagent create configmap dagent-development-document-image-v2 `
-  --from-file=k8s/agent/images/development-document
-kubectl -n dagent create configmap dagent-development-image-v2 `
-  --from-file=k8s/agent/images/development
-kubectl apply -f k8s/agent/build-agent-images.yaml
-kubectl -n dagent wait --for=condition=complete job `
-  -l app.kubernetes.io/part-of=dagent --timeout=15m
-kubectl apply -k k8s
+$password = Read-Host "Alibaba Cloud registry password" -AsSecureString
+$credential = [pscredential]::new("lwjlwjlwj33712563", $password)
+$credential.GetNetworkCredential().Password | docker login `
+  --username $credential.UserName --password-stdin registry.cn-hangzhou.aliyuncs.com
 ```
 
-The overlay also deploys the backend, two Nginx frontend replicas, a repository
-verification workspace-manager, RBAC for dynamic requirement resources, and the test
-Cloudflare tunnel. MySQL remains on Alibaba Cloud RDS; Redis is not used.
+Build, tag, and push every image:
+
+```powershell
+.\k8s\build-images.ps1 -Version v1.0.0 -Push
+```
+
+The script tags images with their full registry names during `docker build`, so a separate
+`docker tag [ImageId] ...` command is unnecessary.
+
+## Deploy
+
+After every push succeeds:
+
+```powershell
+kubectl apply -k k8s
+kubectl -n dagent rollout status deployment/dagent-backend --timeout=5m
+kubectl -n dagent rollout status deployment/dagent-frontend --timeout=5m
+kubectl -n dagent rollout status deployment/dagent-repository-verifier --timeout=5m
+```
+
+The backend reconciles active requirement Deployments. Each requirement Pod contains four
+containers that use their own prebuilt image:
+
+```text
+requirement Pod
+|- requirement-clarification :4096
+|- development-document      :4097
+|- development               :4098
+`- workspace-manager         :8090
+```
+
+The three Agent containers have independent OpenCode configuration, Skill, password, port,
+and state directory. They share only that requirement's PVC. Clarification and development
+document mount the Workspace read-only; development and workspace-manager can write it.
+
+ConfigMaps now contain ordinary non-secret environment configuration only. Secrets remain in
+Kubernetes Secrets. No source code, compiled frontend, Agent Skill, or startup script is stored
+in a ConfigMap.
 
 Required Secrets:
 
@@ -67,12 +79,7 @@ Required Secrets:
 - `dagent-git-credential-key`: `GIT_CREDENTIAL_ENCRYPTION_KEY`
 - `dagent-glm`: `GLM_API_KEY`
 - `dagent-agent-callback`: `AGENT_CALLBACK_TOKEN`
-- `opencode-pull-secret`: registry pull credentials
+- `opencode-pull-secret`: Alibaba Cloud registry pull credentials
 
-The current ACK cluster has no default StorageClass, so the overlay explicitly uses
-`alicloud-disk-topology-alltype` and a 20Gi PVC per requirement. `retain` is the default
-workspace policy. Select `delete` when creating the requirement to remove its PVC when
-the requirement finishes or is deleted.
-
-`AUTO_CREATE_SCHEMA` and `SEED_DEMO_DATA` are enabled only for this test deployment.
-Use versioned migrations and disable demo seeding before production.
+The cluster uses `alicloud-disk-topology-alltype` and a 20Gi PVC per requirement. MySQL is
+Alibaba Cloud RDS and is not packaged as a project image.

@@ -18,10 +18,12 @@ spec:
         app.kubernetes.io/name: dagent-frontend-tunnel
         app.kubernetes.io/part-of: dagent
     spec:
+      imagePullSecrets:
+        - name: opencode-pull-secret
       containers:
         - name: cloudflared
-          image: docker.m.daocloud.io/cloudflare/cloudflared:latest
-          imagePullPolicy: Always
+          image: dagent-cloudflared
+          imagePullPolicy: IfNotPresent
           args:
             - tunnel
             - --no-autoupdate

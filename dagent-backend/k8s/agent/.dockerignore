@@ -1,0 +1,8 @@
+.git
+*.tar.gz
+bundle-v2
+skills
+serena_config.yml
+build-*.ps1
+build-*.yaml
+

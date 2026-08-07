@@ -343,7 +343,7 @@ async def list_mcp_servers(_: CurrentUser) -> ApiResponse[list[dict[str, Any]]]:
                 "status": {
                     "enabled": True,
                     "access": "semantic_read_only",
-                    "source": "requirement-runtime-bundle-v2",
+                    "source": "agent-runtime-image",
                 },
             }
         ]

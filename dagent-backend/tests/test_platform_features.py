@@ -964,7 +964,9 @@ def test_task_modes_disable_child_agents_and_enforce_read_only_tools():
 
 
 def test_development_agent_bash_uses_denylist_instead_of_allowlist():
-    config = json.loads(Path("k8s/agent/bundle-v2/opencode.json").read_text(encoding="utf-8"))
+    config = json.loads(
+        Path("k8s/agent/images/development/opencode.json").read_text(encoding="utf-8")
+    )
 
     expected_bash_policy = {
         "*": "allow",

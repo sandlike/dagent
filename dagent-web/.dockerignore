@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vscode
+.idea
+node_modules
+dist
+.cache
+*.log
+*.tar.gz
+.env
+.env.local
+.env.*.local
+screenshots

@@ -24,6 +24,7 @@ def runtime_settings():
             "REQUIREMENT_CLARIFICATION_IMAGE": "registry.example/clarification:v1",
             "DEVELOPMENT_DOCUMENT_IMAGE": "registry.example/development-document:v1",
             "DEVELOPMENT_AGENT_IMAGE": "registry.example/development:v1",
+            "WORKSPACE_MANAGER_IMAGE": "registry.example/workspace-manager:v1",
             "REQUIREMENT_RUNTIME_STORAGE_CLASS": "test-storage",
             "REQUIREMENT_RUNTIME_STORAGE_SIZE": "8Gi",
             "REQUIREMENT_RUNTIME_NODE_NAME": "worker-a",
@@ -46,7 +47,7 @@ def test_requirement_runtime_resources_are_isolated_by_requirement():
     pod = deployment["spec"]["template"]["spec"]
     assert pod["automountServiceAccountToken"] is False
     assert pod["nodeSelector"] == {"kubernetes.io/hostname": "worker-a"}
-    assert pod["initContainers"][0]["image"] == settings.REQUIREMENT_RUNTIME_INIT_IMAGE
+    assert pod["initContainers"][0]["image"] == settings.WORKSPACE_MANAGER_IMAGE
     init_command = pod["initContainers"][0]["command"][2]
     assert "tar -xzf" not in init_command
     assert "node /opt/dagent/derive-runtime-auth.mjs" in init_command
@@ -63,9 +64,7 @@ def test_requirement_runtime_resources_are_isolated_by_requirement():
         "key": "GIT_CREDENTIAL_ENCRYPTION_KEY",
     }
     assert "agent-bundle" not in {volume["name"] for volume in pod["volumes"]}
-    assert next(volume for volume in pod["volumes"] if volume["name"] == "runtime-tools")[
-        "configMap"
-    ]["name"] == "dagent-workspace-manager"
+    assert "runtime-tools" not in {volume["name"] for volume in pod["volumes"]}
     assert next(volume for volume in pod["volumes"] if volume["name"] == "workspace")[
         "persistentVolumeClaim"
     ]["claimName"] == "dagent-requirement-101-workspace"
@@ -79,6 +78,7 @@ def test_requirement_runtime_resources_are_isolated_by_requirement():
     assert containers["requirement-clarification"]["image"] == settings.REQUIREMENT_CLARIFICATION_IMAGE
     assert containers["development-document"]["image"] == settings.DEVELOPMENT_DOCUMENT_IMAGE
     assert containers["development"]["image"] == settings.DEVELOPMENT_AGENT_IMAGE
+    assert containers["workspace-manager"]["image"] == settings.WORKSPACE_MANAGER_IMAGE
     expected_agents = {
         "requirement-clarification": (
             "requirement-clarification-password",

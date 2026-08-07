@@ -11,18 +11,16 @@ resources:
   - backend.yaml
   - frontend.yaml
   - frontend-tunnel.yaml
-configMapGenerator:
-  - name: dagent-frontend-nginx
-    files:
-      - default.conf=frontend/default.conf
-  - name: dagent-workspace-manager
-    files:
-      - workspace-manager.mjs=agent/workspace-manager.mjs
-      - git-askpass.sh=agent/git-askpass.sh
-      - derive-runtime-auth.mjs=agent/derive-runtime-auth.mjs
-generatorOptions:
-  disableNameSuffixHash: true
 images:
   - name: dagent-backend
-    newName: docker.m.daocloud.io/library/python
-    newTag: 3.11-slim-bookworm
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent
+    newTag: backend-v1.0.0
+  - name: dagent-web
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent
+    newTag: web-v1.0.0
+  - name: dagent-workspace-manager
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent
+    newTag: workspace-manager-v1.0.0
+  - name: dagent-cloudflared
+    newName: registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent
+    newTag: cloudflared-e39ee8da81ad

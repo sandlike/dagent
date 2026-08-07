@@ -1,4 +1,5 @@
-FROM registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode-test-runtime:1.15.12-v3
+ARG AGENT_RUNTIME_IMAGE=registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:agent-runtime-v1.0.0
+FROM ${AGENT_RUNTIME_IMAGE}
 
 LABEL io.dagent.agent-role="requirement_clarification"
 

@@ -21,40 +21,10 @@ spec:
         - name: opencode-pull-secret
       nodeSelector:
         kubernetes.io/hostname: cn-hangzhou.10.45.144.67
-      initContainers:
-        - name: install-app
-          image: dagent-backend:local
-          imagePullPolicy: IfNotPresent
-          command:
-            - sh
-            - -c
-            - >-
-              python -c "import shutil; shutil.unpack_archive('/bundle/dagent.tar.gz', '/app')"
-              && python -m pip install --no-cache-dir
-              --index-url https://mirrors.aliyun.com/pypi/simple/
-              --target /runtime /app
-              && chmod -R a+rX /app /runtime
-          volumeMounts:
-            - name: source-bundle
-              mountPath: /bundle
-              readOnly: true
-            - name: app-source
-              mountPath: /app
-            - name: python-runtime
-              mountPath: /runtime
       containers:
         - name: backend
-          image: dagent-backend:local
+          image: dagent-backend
           imagePullPolicy: IfNotPresent
-          workingDir: /app
-          command:
-            - sh
-            - -c
-            - >-
-              test -f /app/dagent/app.py
-              || { echo 'dagent source is missing from /app'; find /app -maxdepth 2 -type f; exit 1; };
-              exec python -m uvicorn dagent.app:create_app
-              --factory --host 0.0.0.0 --port 8000
           ports:
             - name: http
               containerPort: 8000
@@ -64,8 +34,6 @@ spec:
             - secretRef:
                 name: dagent-secrets
           env:
-            - name: PYTHONPATH
-              value: /runtime:/app
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -131,21 +99,8 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            - name: app-source
-              mountPath: /app
-              readOnly: true
-            - name: python-runtime
-              mountPath: /runtime
-              readOnly: true
       volumes:
         - name: tmp
-          emptyDir: {}
-        - name: source-bundle
-          configMap:
-            name: dagent-source-bundle-v60
-        - name: app-source
-          emptyDir: {}
-        - name: python-runtime
           emptyDir: {}
 ---
 apiVersion: v1

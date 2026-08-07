@@ -22,11 +22,8 @@ spec:
         - name: opencode-pull-secret
       containers:
         - name: workspace-manager
-          image: registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12
+          image: dagent-workspace-manager
           imagePullPolicy: IfNotPresent
-          command:
-            - node
-            - /opt/dagent/workspace-manager.mjs
           envFrom:
             - secretRef:
                 name: dagent-agent-callback
@@ -68,16 +65,9 @@ spec:
               drop:
                 - ALL
           volumeMounts:
-            - name: workspace-manager
-              mountPath: /opt/dagent
-              readOnly: true
             - name: workspaces
               mountPath: /workspaces
       volumes:
-        - name: workspace-manager
-          configMap:
-            name: dagent-workspace-manager
-            defaultMode: 0555
         - name: workspaces
           emptyDir: {}
 ---

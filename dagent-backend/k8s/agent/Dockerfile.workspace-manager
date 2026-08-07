@@ -1,0 +1,17 @@
+ARG OPENCODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12
+FROM ${OPENCODE_IMAGE}
+
+USER root
+
+COPY --chown=1500:1500 workspace-manager.mjs derive-runtime-auth.mjs git-askpass.sh /opt/dagent/
+RUN chmod 0555 /opt/dagent/workspace-manager.mjs \
+    /opt/dagent/derive-runtime-auth.mjs \
+    /opt/dagent/git-askpass.sh
+
+USER 1500:1500
+
+ENV WORKSPACE_ROOT=/workspaces \
+    WORKSPACE_MANAGER_PORT=8090
+
+EXPOSE 8090
+CMD ["node", "/opt/dagent/workspace-manager.mjs"]

@@ -1,4 +1,5 @@
-FROM registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12
+ARG OPENCODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12
+FROM ${OPENCODE_IMAGE}
 
 USER root
 

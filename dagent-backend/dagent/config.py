@@ -50,8 +50,8 @@ class Settings(BaseSettings):
         "registry.cn-hangzhou.aliyuncs.com/citics_lwj/"
         "dagent-development:1.0.1"
     )
-    REQUIREMENT_RUNTIME_INIT_IMAGE: str = (
-        "registry.cn-hangzhou.aliyuncs.com/citics_lwj/opencode:1.15.12"
+    WORKSPACE_MANAGER_IMAGE: str = (
+        "registry.cn-hangzhou.aliyuncs.com/citics_lwj/dagent:workspace-manager-v1.0.0"
     )
     REQUIREMENT_RUNTIME_IMAGE_PULL_SECRET: str = "opencode-pull-secret"
     REQUIREMENT_RUNTIME_STORAGE_CLASS: str = ""

@@ -234,7 +234,7 @@ def build_runtime_deployment(
         "initContainers": [
             {
                 "name": "initialize-requirement-runtime",
-                "image": settings.REQUIREMENT_RUNTIME_INIT_IMAGE,
+                "image": settings.WORKSPACE_MANAGER_IMAGE,
                 "imagePullPolicy": "IfNotPresent",
                 "command": [
                     "sh",
@@ -266,7 +266,6 @@ def build_runtime_deployment(
                 ],
                 "securityContext": {"runAsUser": 0, "runAsGroup": 0},
                 "volumeMounts": [
-                    {"name": "runtime-tools", "mountPath": "/opt/dagent", "readOnly": True},
                     {"name": "runtime-auth", "mountPath": "/runtime-auth"},
                     {"name": "workspace", "mountPath": "/data"},
                 ],
@@ -317,7 +316,7 @@ def build_runtime_deployment(
             ),
             {
                 "name": "workspace-manager",
-                "image": settings.REQUIREMENT_RUNTIME_INIT_IMAGE,
+                "image": settings.WORKSPACE_MANAGER_IMAGE,
                 "imagePullPolicy": "IfNotPresent",
                 "command": [
                     "sh",
@@ -357,7 +356,6 @@ def build_runtime_deployment(
                     "capabilities": {"drop": ["ALL"]},
                 },
                 "volumeMounts": [
-                    {"name": "runtime-tools", "mountPath": "/opt/dagent", "readOnly": True},
                     {
                         "name": "runtime-auth",
                         "mountPath": "/run/dagent/workspace-token",
@@ -379,10 +377,6 @@ def build_runtime_deployment(
                 "persistentVolumeClaim": {
                     "claimName": requirement_workspace_claim_name(requirement_id)
                 },
-            },
-            {
-                "name": "runtime-tools",
-                "configMap": {"name": "dagent-workspace-manager", "defaultMode": 0o555},
             },
         ],
     }
