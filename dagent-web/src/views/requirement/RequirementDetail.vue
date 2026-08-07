@@ -483,11 +483,14 @@ async function cancelTask(task: AgentTask) {
 
 async function deleteRequirement() {
   if (!requirement.value) return
+  const unfinishedWarning = requirement.value.stage === 'completed'
+    ? ''
+    : '该需求尚未完成，排队中或运行中的 Agent 任务会被立即取消。'
   const workspaceAction = requirement.value.workspace_retention_policy === 'delete'
     ? '同时删除该需求的 Workspace'
     : '保留该需求的 Workspace'
   await ElMessageBox.confirm(
-    `需求会从列表隐藏并立即停止专属 Agent Pod；数据库中的需求、结果、任务日志和审计日志会保留。当前策略：${workspaceAction}。`,
+    `${unfinishedWarning}需求会从列表隐藏并立即停止专属 Agent Pod；数据库中的需求、结果、任务日志和审计日志会保留。当前策略：${workspaceAction}。`,
     '删除需求',
     {
       type: 'warning',
@@ -731,12 +734,14 @@ onUnmounted(stopBackgroundUpdates)
         <el-button v-if="hasAction('submit')" type="primary" :icon="Check" @click="submitRequirement">提交需求</el-button>
         <el-button v-if="hasAction('pause')" :icon="VideoPause" @click="pauseRequirement">暂停</el-button>
         <el-button v-if="hasAction('resume')" type="primary" :icon="VideoPlay" @click="resumeRequirement">恢复</el-button>
-        <el-dropdown v-if="canDeleteRequirement || (requirement.stage !== 'completed' && requirement.run_status !== 'cancelled')">
+        <el-tooltip v-if="canDeleteRequirement" content="删除需求" placement="bottom">
+          <el-button type="danger" plain circle :icon="Delete" aria-label="删除需求" @click="deleteRequirement" />
+        </el-tooltip>
+        <el-dropdown v-if="requirement.stage !== 'completed' && requirement.run_status !== 'cancelled'">
           <el-button :icon="MoreFilled" circle aria-label="更多操作" />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-if="requirement.stage !== 'completed' && requirement.run_status !== 'cancelled'" @click="cancelRequirement">取消需求</el-dropdown-item>
-              <el-dropdown-item v-if="canDeleteRequirement" :icon="Delete" divided @click="deleteRequirement">删除需求</el-dropdown-item>
+              <el-dropdown-item @click="cancelRequirement">取消需求</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>

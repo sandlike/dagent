@@ -1167,6 +1167,25 @@ async def test_requirement_pod_lifecycle_and_soft_delete_preserve_database_recor
             headers=users["pm"]["headers"],
         )
     )
+    async with async_session() as session:
+        stored = await session.get(Requirement, requirement["id"])
+        assert stored is not None
+        stored.run_status = "running"
+        running_task = AgentTask(
+            tenant_id=stored.tenant_id,
+            requirement_id=stored.id,
+            stage=stored.stage,
+            task_type="clarification_generate",
+            status="running",
+            requested_by=users["pm"]["id"],
+            idempotency_key="delete-running-requirement",
+            input_summary="This task must be cancelled when its unfinished requirement is deleted.",
+        )
+        session.add(running_task)
+        await session.commit()
+        await session.refresh(running_task)
+        running_task_id = running_task.id
+
     deleted = payload(
         await client.delete(
             f"/api/v1/requirements/{requirement['id']}",
@@ -1200,6 +1219,12 @@ async def test_requirement_pod_lifecycle_and_soft_delete_preserve_database_recor
         stored = await session.get(Requirement, requirement["id"])
         assert stored is not None
         assert stored.deleted_at is not None
+        assert stored.run_status == "cancelled"
+        cancelled_task = await session.get(AgentTask, running_task_id)
+        assert cancelled_task is not None
+        assert cancelled_task.status == "cancelled"
+        assert cancelled_task.completed_at is not None
+        assert cancelled_task.error_message == "Requirement deleted by user"
         audit = await session.scalar(
             select(AuditLog).where(
                 AuditLog.action == "requirement.delete",

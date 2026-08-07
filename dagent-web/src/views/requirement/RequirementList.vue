@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { requirementApi } from '@/api/requirements'
 import type { AgentDefinition, PriorityCode, Requirement, RunStatus, StageCode } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
@@ -18,6 +18,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const showCreateDialog = ref(false)
 const saving = ref(false)
+const deletingRequirementId = ref<number | null>(null)
 const agents = ref<AgentDefinition[]>([])
 const filters = reactive({ stage: '', priority: '', project_id: undefined as number | undefined })
 const form = reactive({
@@ -33,6 +34,7 @@ const form = reactive({
 })
 
 const canCreate = computed(() => authStore.user?.roles.some((role) => ['admin', 'pm'].includes(role)))
+const canDelete = computed(() => authStore.user?.roles.some((role) => ['admin', 'pm'].includes(role)))
 const projectNames = computed(() =>
   Object.fromEntries(projectStore.projects.map((project) => [project.id, project.name])),
 )
@@ -105,6 +107,33 @@ function openRequirement(row: Requirement) {
   router.push(`/requirements/${row.id}`)
 }
 
+async function deleteRequirement(row: Requirement) {
+  const unfinishedWarning = row.stage === 'completed'
+    ? ''
+    : '该需求尚未完成，排队中或运行中的 Agent 任务会被立即取消，专属 Pod 会被停止。'
+  const workspaceAction = row.workspace_retention_policy === 'delete'
+    ? '该需求的 Workspace 也会删除。'
+    : '该需求的 Workspace 会保留。'
+  await ElMessageBox.confirm(
+    `${unfinishedWarning}需求会从列表隐藏，但数据库中的记录、结果、任务日志和审计日志会保留。${workspaceAction}`,
+    `删除 REQ-${row.id}`,
+    {
+      type: 'warning',
+      confirmButtonText: '删除需求',
+      cancelButtonText: '返回',
+    },
+  )
+  deletingRequirementId.value = row.id
+  try {
+    await requirementApi.delete(row.id, row.version)
+    if (store.requirements.length === 1 && page.value > 1) page.value -= 1
+    await fetchList()
+    ElMessage.success(`REQ-${row.id} 已删除，专属 Agent Pod 正在回收`)
+  } finally {
+    deletingRequirementId.value = null
+  }
+}
+
 function getPriorityColor(priority: PriorityCode) {
   return priorityColors[priority]
 }
@@ -163,6 +192,21 @@ onMounted(async () => {
         <el-table-column label="阶段" min-width="180"><template #default="{ row }">{{ getStageLabel(row.stage) }}</template></el-table-column>
         <el-table-column label="运行状态" width="140"><template #default="{ row }"><el-tag :type="getRunStatus(row.run_status).type">{{ getRunStatus(row.run_status).label }}</el-tag></template></el-table-column>
         <el-table-column label="更新时间" width="190"><template #default="{ row }">{{ formatTime(row.updated_at) }}</template></el-table-column>
+        <el-table-column v-if="canDelete" label="操作" width="72" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-tooltip content="删除需求" placement="top">
+              <el-button
+                circle
+                type="danger"
+                plain
+                :icon="Delete"
+                :loading="deletingRequirementId === row.id"
+                :aria-label="`删除 REQ-${row.id}`"
+                @click.stop="deleteRequirement(row)"
+              />
+            </el-tooltip>
+          </template>
+        </el-table-column>
       </el-table>
       <div class="pagination-row">
         <el-pagination v-model:current-page="page" v-model:page-size="pageSize" layout="total, sizes, prev, pager, next" :total="store.total" :page-sizes="[20, 50, 100]" @change="fetchList" />
